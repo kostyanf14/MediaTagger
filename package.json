@@ -1,0 +1,16 @@
+{
+  "name": "mediatagger-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix MediaTagger.Electron && npm install --prefix mediaTagger.client",
+    "dev": "concurrently --kill-others --names \"API,React,Electron\" --prefix-colors \"cyan,green,magenta\" \"npm run dev:api\" \"npm run dev:react\" \"npm run dev:electron\"",
+    "dev:api": "dotnet run --project MediaTagger.API",
+    "dev:react": "npm start --prefix mediaTagger.client",
+    "dev:electron": "node wait-and-launch.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "electron": "^28.0.0"
+  }
+}
