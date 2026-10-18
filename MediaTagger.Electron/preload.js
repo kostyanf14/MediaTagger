@@ -1,9 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Native drag — sends real file path to OS drag system
-  startNativeDrag: (filePath, thumbnailPath) => {
-    ipcRenderer.send('start-native-drag', { filePath, thumbnailPath })
+  // Native drag — sends real file path to OS drag system.
+  // previewDataUrl carries the drag icon for formats Chromium cannot decode.
+  startNativeDrag: (filePath, previewDataUrl) => {
+    ipcRenderer.send('start-native-drag', { filePath, previewDataUrl })
   },
 
   // Open folder picker dialog

@@ -4,74 +4,85 @@ namespace MediaTagger.API.Services;
 
 public class FileSystemService
 {
-    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
-        { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic", ".heif" };
+    private readonly LibraryIndex _index;
 
-    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
-        { ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".webm", ".mts", ".m2ts" };
-
-    private readonly TagsService _tagsService;
-    private readonly ExifService _exifService;
-
-    public FileSystemService(TagsService tagsService, ExifService exifService)
+    public FileSystemService(LibraryIndex index)
     {
-        _tagsService = tagsService;
-        _exifService = exifService;
+        _index = index;
     }
 
-    public bool IsMediaFile(string path)
-    {
-        var ext = Path.GetExtension(path);
-        return ImageExtensions.Contains(ext) || VideoExtensions.Contains(ext);
-    }
+    public bool IsMediaFile(string path) => LibraryIndex.IsMediaFile(path);
 
-    public string GetMediaType(string path)
-    {
-        var ext = Path.GetExtension(path);
-        return VideoExtensions.Contains(ext) ? "video" : "image";
-    }
+    public string GetMediaType(string path) => LibraryIndex.GetMediaType(path);
 
     public List<MediaFile> GetMediaFiles(string folderPath, bool recursive = false)
     {
         if (!Directory.Exists(folderPath))
             return new List<MediaFile>();
 
-        var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-        var files = Directory.EnumerateFiles(folderPath, "*", searchOption)
-            .Where(IsMediaFile)
-            .OrderBy(f => f)
-            .ToList();
+        return _index.Query(folderPath, recursive);
+    }
 
-        var tagsFile = _tagsService.ReadTagsFile(folderPath);
-        var result = new List<MediaFile>();
+    /// <summary>Call after changing a folder's contents directly, e.g. deleting a file.</summary>
+    public void InvalidateFolder(string folderPath) => _index.Invalidate(folderPath);
 
-        foreach (var filePath in files)
+    public AllTagsResponse GetAllTags(string rootPath)
+    {
+        var people = new HashSet<string>();
+        var groups = new HashSet<string>();
+        var albums = new HashSet<string>();
+        // Place is a single value per file rather than a list, but the suggestions
+        // it feeds work the same way.
+        var places = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in GetMediaFiles(rootPath, recursive: true))
         {
-            var fileName = Path.GetFileName(filePath);
-            var info = new FileInfo(filePath);
-            tagsFile.Files.TryGetValue(fileName, out var tags);
-            tags ??= new FileTags();
-
-            var exif = _exifService.ReadExif(filePath);
-
-            // Auto-populate coordinates from EXIF if not set manually
-            if (tags.Coordinates == null && exif?.GpsCoordinates != null)
-                tags.Coordinates = exif.GpsCoordinates;
-
-            result.Add(new MediaFile
-            {
-                FileName = fileName,
-                FilePath = filePath,
-                RelativePath = Path.GetRelativePath(folderPath, filePath),
-                Type = GetMediaType(filePath),
-                Size = info.Length,
-                Modified = info.LastWriteTime,
-                Tags = tags,
-                Exif = exif
-            });
+            var tags = file.Tags;
+            tags.People.ForEach(p => people.Add(p));
+            tags.Groups.ForEach(g => groups.Add(g));
+            tags.Albums.ForEach(a => albums.Add(a));
+            if (!string.IsNullOrWhiteSpace(tags.Place)) places.Add(tags.Place.Trim());
         }
 
-        return result;
+        return new AllTagsResponse
+        {
+            People = people.OrderBy(x => x).ToList(),
+            Groups = groups.OrderBy(x => x).ToList(),
+            Albums = albums.OrderBy(x => x).ToList(),
+            Places = places.OrderBy(x => x).ToList()
+        };
+    }
+
+    public LibraryStats GetLibraryStats(string rootPath)
+    {
+        var albums  = new Dictionary<string, (int Count, string? Cover)>();
+        var people  = new Dictionary<string, (int Count, string? Cover)>();
+        var places  = new Dictionary<string, (int Count, string? Cover)>();
+        var groups  = new Dictionary<string, (int Count, string? Cover)>();
+
+        foreach (var file in GetMediaFiles(rootPath, recursive: true))
+        {
+            var tags = file.Tags;
+
+            void Add(Dictionary<string, (int, string?)> dict, string key)
+            {
+                if (!dict.TryGetValue(key, out var val)) val = (0, null);
+                dict[key] = (val.Item1 + 1, val.Item2 ?? file.FilePath);
+            }
+
+            tags.Albums.ForEach(a => Add(albums, a));
+            tags.People.ForEach(p => Add(people, p));
+            tags.Groups.ForEach(g => Add(groups, g));
+            if (!string.IsNullOrWhiteSpace(tags.Place)) Add(places, tags.Place);
+        }
+
+        return new LibraryStats
+        {
+            Albums = albums.Select(kv => new AlbumStat  { Name = kv.Key, Count = kv.Value.Count, CoverPath = kv.Value.Cover }).OrderBy(x => x.Name).ToList(),
+            People = people.Select(kv => new PersonStat { Name = kv.Key, Count = kv.Value.Count, CoverPath = kv.Value.Cover }).OrderByDescending(x => x.Count).ToList(),
+            Places = places.Select(kv => new PlaceStat  { Name = kv.Key, Count = kv.Value.Count, CoverPath = kv.Value.Cover }).OrderByDescending(x => x.Count).ToList(),
+            Groups = groups.Select(kv => new GroupStat  { Name = kv.Key, Count = kv.Value.Count, CoverPath = kv.Value.Cover }).OrderBy(x => x.Name).ToList(),
+        };
     }
 
     public FolderNode GetFolderTree(string rootPath, int depth = 3)

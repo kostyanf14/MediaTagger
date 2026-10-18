@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Box, CssBaseline, ThemeProvider, createTheme,
+  Box, CssBaseline, ThemeProvider, createTheme, LinearProgress,
   Typography, Tabs, Tab, Divider, Button,
   Menu, MenuItem, Tooltip, IconButton, Chip
 } from '@mui/material'
@@ -20,9 +20,10 @@ import { MapView } from './components/MapView'
 import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
 import {
-  mediaApi, settingsApi, AppSettings,
-  MediaFile, FolderNode, AllTagsResponse, SearchRequest
+  mediaApi, settingsApi, AppSettings, ScanProgress,
+  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
 } from './api/client'
+import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
 import { useElectron } from './hooks/useElectron'
 
 const darkTheme = createTheme({
@@ -36,6 +37,48 @@ const darkTheme = createTheme({
 })
 
 const MAX_RECENT = 8
+// Often enough to look live, rare enough to stay out of the scan's way.
+const SCAN_POLL_MS = 300
+
+/** Drops a trailing separator so the same folder is not stored two ways. */
+function normalizeFolder(path: string): string {
+  return path.replace(/[\\/]+$/, '')
+}
+
+/**
+ * Windows treats paths case-insensitively and ignores a trailing separator, so one
+ * folder can arrive as several different strings — the picker returns the on-disk
+ * casing, while a remembered entry may have another. Compared raw, reopening a
+ * folder appended a second copy instead of moving the existing one to the front.
+ */
+function folderKey(path: string): string {
+  return normalizeFolder(path).replace(/\//g, '\\').toLowerCase()
+}
+
+/** Appends what is new, ignoring case-only repeats — the same rule the server applies. */
+function mergeTagList(existing: string[], additions: string[]): string[] {
+  const result = [...existing]
+  for (const addition of additions) {
+    const value = addition.trim()
+    if (!value) continue
+    if (!result.some(tag => tag.toLowerCase() === value.toLowerCase())) result.push(value)
+  }
+  return result
+}
+
+/** Adds values to a sorted suggestion list, returning the same array when nothing is new. */
+function withSuggestions(list: string[], extra: string[], ignoreCase = false): string[] {
+  const known = new Set(ignoreCase ? list.map(v => v.toLowerCase()) : list)
+  const fresh: string[] = []
+  for (const raw of extra) {
+    const value = raw.trim()
+    const key = ignoreCase ? value.toLowerCase() : value
+    if (!value || known.has(key)) continue
+    known.add(key)
+    fresh.push(value)
+  }
+  return fresh.length ? [...list, ...fresh].sort((a, b) => a.localeCompare(b)) : list
+}
 
 export default function App() {
   const { selectFolder } = useElectron()
@@ -44,19 +87,71 @@ export default function App() {
   const [folderTree, setFolderTree] = useState<FolderNode | null>(null)
   const [currentFolder, setCurrentFolder] = useState('')
   const [files, setFiles] = useState<MediaFile[]>([])
-  const [selectedFile, setSelectedFile] = useState<MediaFile | null>(null)
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
-  const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [] })
+  const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [], places: [] })
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map
   const [isSearching, setIsSearching] = useState(false)
   const [recentAnchor, setRecentAnchor] = useState<null | HTMLElement>(null)
+  // Browsing a folder includes everything below it unless the user says otherwise.
+  const [recursive, setRecursive] = useState(true)
+  const [scan, setScan] = useState<ScanProgress | null>(null)
+  const [sortField, setSortField] = useState<SortField>('dateTaken')
+  // Oldest first: a capture-date view reads as a timeline running forwards.
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [groupBy, setGroupBy] = useState<GroupField>('date')
+  // Bumped on every tag change so views built from tags — the library counts, the
+  // map pins — know their data is stale and can refetch when next shown.
+  const [tagsVersion, setTagsVersion] = useState(0)
+  const markTagsChanged = useCallback(() => setTagsVersion(v => v + 1), [])
+
+  // Only poll while a load is in flight. The first scan of a large library reads
+  // metadata from every file and takes seconds; cached ones finish before the first
+  // tick, so the bar simply never appears.
+  useEffect(() => {
+    if (!loadingFiles) { setScan(null); return }
+    let cancelled = false
+    const tick = () => {
+      mediaApi.getScanProgress()
+        .then(r => { if (!cancelled) setScan(r.data.active ? r.data : null) })
+        .catch(() => {})
+    }
+    const timer = setInterval(tick, SCAN_POLL_MS)
+    tick()
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [loadingFiles])
+
+  // The selection is a set of paths; the file objects come from the current list, so
+  // they stay fresh when tags change without anything having to re-point them.
+  const selection = useMemo(() => {
+    const chosen = new Set(selectedPaths)
+    return files.filter(f => chosen.has(f.filePath))
+  }, [files, selectedPaths])
+
+  // The order on screen. It lives here rather than in the gallery because the
+  // lightbox has to step through photos in the same order the grid shows them.
+  const sorted = useMemo(() => sortFiles(files, sortField, sortDir), [files, sortField, sortDir])
+  const groups = useMemo(() => groupFiles(sorted, groupBy), [sorted, groupBy])
+  const orderedFiles = useMemo(
+    () => (groupBy === 'none' ? sorted : groups.flatMap(g => g.files)),
+    [sorted, groups, groupBy]
+  )
 
   useEffect(() => {
-    settingsApi.get().then(res => {
+    settingsApi.get().then(async res => {
       const s = res.data
       setSettings(s)
-      if (s.defaultFolder) openFolder(s.defaultFolder, s)
+      // Prefer the pinned folder, then the most recently opened one. Each is checked
+      // first: a library on an external drive may simply not be plugged in today.
+      const candidates = [s.defaultFolder, ...s.recentFolders].filter(Boolean)
+      for (const candidate of candidates) {
+        const reachable = await mediaApi.folderExists(candidate)
+          .then(r => r.data)
+          // If the probe itself fails, trying the folder beats opening nothing.
+          .catch(() => true)
+        if (reachable) { openFolder(candidate, s); return }
+      }
     }).catch(() => {})
   }, [])
 
@@ -66,8 +161,21 @@ export default function App() {
   }, [])
 
   const addToRecent = useCallback((path: string, current: AppSettings): AppSettings => {
-    const recent = [path, ...current.recentFolders.filter(f => f !== path)].slice(0, MAX_RECENT)
-    return { ...current, recentFolders: recent }
+    const folder = normalizeFolder(path)
+
+    // Keep the newest first, then everything else in order, skipping anything that
+    // is the same folder written differently. This also clears out duplicates that
+    // an earlier build may have left in the list.
+    const seen = new Set([folderKey(folder)])
+    const recent = [folder]
+    for (const previous of current.recentFolders) {
+      const key = folderKey(previous)
+      if (seen.has(key)) continue
+      seen.add(key)
+      recent.push(previous)
+    }
+
+    return { ...current, recentFolders: recent.slice(0, MAX_RECENT) }
   }, [])
 
   const loadFolderTree = useCallback(async (path: string) => {
@@ -75,17 +183,19 @@ export default function App() {
     setFolderTree(res.data)
   }, [])
 
-  const loadFiles = useCallback(async (folder: string) => {
+  // withSubfolders is passed explicitly so a toggle can load with the new value
+  // without waiting for the state update to land.
+  const loadFiles = useCallback(async (folder: string, withSubfolders = recursive) => {
     setLoadingFiles(true)
     setIsSearching(false)
     try {
-      const res = await mediaApi.getFiles(folder)
+      const res = await mediaApi.getFiles(folder, withSubfolders)
       setFiles(res.data)
-      setSelectedFile(null)
+      setSelectedPaths([])
     } finally {
       setLoadingFiles(false)
     }
-  }, [])
+  }, [recursive])
 
   const loadAllTags = useCallback(async (path: string) => {
     const res = await mediaApi.getAllTags(path)
@@ -102,6 +212,11 @@ export default function App() {
     saveSettings(addToRecent(path, base))
   }, [settings, addToRecent, saveSettings, loadFolderTree, loadFiles, loadAllTags])
 
+  const handleRecursiveChange = (withSubfolders: boolean) => {
+    setRecursive(withSubfolders)
+    if (currentFolder) loadFiles(currentFolder, withSubfolders)
+  }
+
   const handleSelectRoot = async () => {
     const path = await selectFolder()
     if (path) openFolder(path)
@@ -109,11 +224,23 @@ export default function App() {
 
   const handleDelete = async (file: MediaFile) => {
     await mediaApi.deleteFile(file.filePath)
-    if (selectedFile?.filePath === file.filePath) setSelectedFile(null)
+    setSelectedPaths(prev => prev.filter(p => p !== file.filePath))
     if (lightboxFile?.filePath === file.filePath) setLightboxFile(null)
-    loadFiles(currentFolder)
+    // Drop it from the list directly — re-reading the folder would blank the grid.
+    setFiles(prev => prev.filter(f => f.filePath !== file.filePath))
     loadAllTags(rootPath)
+    markTagsChanged()
   }
+
+  // Called from map lightbox "show in app" button
+  const handleShowInApp = useCallback((file: MediaFile) => {
+    const folder = file.filePath.replace(/[\/\\][^\/\\]+$/, '')
+    setCurrentFolder(folder)
+    loadFiles(folder)
+    setTab(0)
+    // Select the file after files load
+    setTimeout(() => setSelectedPaths([file.filePath]), 300)
+  }, [loadFiles])
 
   const handleSearch = async (req: SearchRequest | null) => {
     if (!req) { setIsSearching(false); loadFiles(currentFolder); return }
@@ -127,23 +254,55 @@ export default function App() {
     }
   }
 
-  const handleTagsSaved = () => {
-    loadFiles(currentFolder)
-    if (rootPath) loadAllTags(rootPath)
-    if (selectedFile) {
-      mediaApi.getFiles(currentFolder).then(res => {
-        const updated = res.data.find(f => f.filePath === selectedFile.filePath)
-        if (updated) setSelectedFile(updated)
-      })
-    }
-  }
+  // Newly used tags go straight into the suggestion lists. Asking the server to
+  // recount the whole library after every chip would say the same thing, later.
+  const rememberTags = useCallback((used: { people?: string[]; groups?: string[]; albums?: string[]; place?: string }) => {
+    setAllTags(prev => {
+      const people = withSuggestions(prev.people, used.people ?? [])
+      const groups = withSuggestions(prev.groups, used.groups ?? [])
+      const albums = withSuggestions(prev.albums, used.albums ?? [])
+      const places = withSuggestions(prev.places, used.place ? [used.place] : [], true)
+      const unchanged = people === prev.people && groups === prev.groups
+        && albums === prev.albums && places === prev.places
+      return unchanged ? prev : { people, groups, albums, places }
+    })
+  }, [])
+
+  // A bulk add is the same merge on every selected file, so it is applied to what
+  // is already loaded instead of downloading the folder again.
+  const handleTagsSaved = useCallback((applied: BulkTagsRequest) => {
+    const touched = new Set(applied.filePaths)
+    const place = applied.place?.trim()
+    setFiles(prev => prev.map(f => (touched.has(f.filePath)
+      ? {
+          ...f,
+          tags: {
+            ...f.tags,
+            people: mergeTagList(f.tags.people, applied.people),
+            groups: mergeTagList(f.tags.groups, applied.groups),
+            albums: mergeTagList(f.tags.albums, applied.albums),
+            place: place || f.tags.place
+          }
+        }
+      : f)))
+    rememberTags(applied)
+    markTagsChanged()
+  }, [rememberTags, markTagsChanged])
+
+  // A tag chip saved itself. Patch what is already loaded rather than reloading the
+  // folder — loadFiles clears the selection, which would close the panel mid-edit.
+  const handleTagsAutoSaved = useCallback((filePath: string, updated: FileTags) => {
+    setFiles(prev => prev.map(f => (f.filePath === filePath ? { ...f, tags: updated } : f)))
+    rememberTags(updated)
+    markTagsChanged()
+  }, [rememberTags, markTagsChanged])
 
   const handleLibraryFilter = (req: SearchRequest) => {
     setTab(0)
     handleSearch(req)
   }
 
-  const isDefault = !!rootPath && settings.defaultFolder === rootPath
+  const isDefault = !!rootPath && folderKey(settings.defaultFolder) === folderKey(rootPath)
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -250,36 +409,71 @@ export default function App() {
             )}
           </Box>
 
+          {/* Indexing progress — the first scan of a folder is the slow one */}
+          {scan && (
+            <Box sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.5 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Індексація медіафайлів…
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                  {scan.processed.toLocaleString('uk-UA')} / {scan.total.toLocaleString('uk-UA')}
+                </Typography>
+              </Box>
+              <LinearProgress
+                // Total is known up front, so this can show real progress rather than
+                // an endless barber pole.
+                variant={scan.total > 0 ? 'determinate' : 'indeterminate'}
+                value={scan.total > 0 ? (scan.processed / scan.total) * 100 : 0}
+                sx={{ height: 4, borderRadius: 2 }}
+              />
+            </Box>
+          )}
+
           <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
             <Box sx={{ flex: 1, overflow: 'auto', transition: 'margin-right 0.2s',
-              mr: selectedFile ? '340px' : 0 }}>
-              {tab === 0 && (
-                <>
-                  {currentFolder && (
-                    <Typography variant="caption" color="text.secondary"
-                      sx={{ px: 2, pt: 1, display: 'block' }}>
-                      {isSearching ? `Результати пошуку: ${files.length} файлів` : currentFolder}
-                    </Typography>
-                  )}
-                  <MediaGallery
-                    files={files} loading={loadingFiles}
-                    selectedFile={selectedFile}
-                    onSelect={setSelectedFile}
-                    onDoubleClick={setLightboxFile}
-                    onDelete={handleDelete}
-                  />
-                </>
-              )}
-              {tab === 1 && (
-                <LibraryPanel rootPath={rootPath} onFilter={handleLibraryFilter} />
-              )}
-              {tab === 2 && <MapView rootPath={rootPath} />}
+              mr: selection.length > 0 ? '340px' : 0 }}>
+
+              {/* Gallery — always mounted, hidden when not active. It fills the pane
+                  and scrolls inside itself, which is what lets it draw only the
+                  rows in view. */}
+              <Box sx={{ display: tab === 0 ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+                {currentFolder && (
+                  <Typography variant="caption" color="text.secondary"
+                    sx={{ px: 2, pt: 1, display: 'block', flexShrink: 0 }}>
+                    {isSearching ? `Результати пошуку: ${files.length} файлів` : currentFolder}
+                  </Typography>
+                )}
+                <MediaGallery
+                  groups={groups} orderedFiles={orderedFiles} loading={loadingFiles}
+                  recursive={recursive} onRecursiveChange={handleRecursiveChange}
+                  sortField={sortField} sortDir={sortDir} groupBy={groupBy}
+                  onSortField={setSortField} onSortDir={setSortDir} onGroupBy={setGroupBy}
+                  selectedPaths={selectedPaths}
+                  onSelectionChange={setSelectedPaths}
+                  onDoubleClick={setLightboxFile}
+                  onDelete={handleDelete}
+                />
+              </Box>
+
+              {/* Library — always mounted, hidden when not active */}
+              <Box sx={{ display: tab === 1 ? 'block' : 'none', height: '100%' }}>
+                <LibraryPanel rootPath={rootPath} refreshKey={tagsVersion}
+                  active={tab === 1} onFilter={handleLibraryFilter} />
+              </Box>
+
+              {/* Map — always mounted, hidden when not active — preserves zoom/pan state */}
+              <Box sx={{ display: tab === 2 ? 'block' : 'none', height: '100%' }}>
+                <MapView rootPath={rootPath} currentFolder={currentFolder}
+                  refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp} />
+              </Box>
             </Box>
 
             <TagsSidePanel
-              file={selectedFile}
-              onClose={() => setSelectedFile(null)}
+              selection={selection}
+              onClose={() => setSelectedPaths([])}
               onSaved={handleTagsSaved}
+              onAutoSaved={handleTagsAutoSaved}
               allTags={allTags}
             />
           </Box>
@@ -289,10 +483,10 @@ export default function App() {
       {/* Lightbox */}
       <LightboxViewer
         file={lightboxFile}
-        files={files}
+        files={orderedFiles}
         onClose={() => setLightboxFile(null)}
         onNavigate={setLightboxFile}
-        onOpenTags={f => { setSelectedFile(f); setLightboxFile(null) }}
+        onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
       />
     </ThemeProvider>
   )

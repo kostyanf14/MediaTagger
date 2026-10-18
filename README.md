@@ -168,3 +168,17 @@ npm run dev
 - .NET API на `localhost:5001`
 - React на `localhost:3000`
 - Electron (чекає поки обидва готові, потім відкриває вікно)
+
+## Швидкий запуск (без режиму розробки)
+
+`npm run dev` запускає dev-збірки React і .NET — вони помітно повільніші. Для щоденної роботи:
+
+```bash
+# Один раз (і після кожної зміни коду): зібрати React та опублікувати Release API
+npm run build
+
+# Запустити застосунок
+npm start
+```
+
+Electron сам стартує опублікований API з `MediaTagger.API/bin/publish`; якщо його ще немає — використає `dotnet run`.

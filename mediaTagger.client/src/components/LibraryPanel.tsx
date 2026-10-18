@@ -1,31 +1,48 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
-  Box, Typography, Grid, Card, CardMedia, CardContent,
+  Box, Typography, Grid, Card, CardContent,
   Tabs, Tab, Skeleton, Chip, Tooltip
 } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
 import PhotoAlbumIcon from '@mui/icons-material/PhotoAlbum'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import GroupsIcon from '@mui/icons-material/Groups'
-import { mediaApi, LibraryStats, SearchRequest } from '../api/client'
+import { mediaApi, LibraryStats, SearchRequest, THUMB_SIZE } from '../api/client'
+import { Thumbnail } from './Thumbnail'
+
+const COVER_HEIGHT = 80
 
 interface Props {
   rootPath: string
+  /** Bumped whenever tags change anywhere, so the counts here can catch up. */
+  refreshKey: number
+  /** Only the visible tab refetches; a hidden one waits until it is opened. */
+  active: boolean
   onFilter: (req: SearchRequest) => void
 }
 
-export function LibraryPanel({ rootPath, onFilter }: Props) {
+export function LibraryPanel({ rootPath, refreshKey, active, onFilter }: Props) {
   const [stats, setStats] = useState<LibraryStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState(0)
+  // What the currently shown numbers were built from.
+  const loadedFor = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!rootPath) return
+    if (!rootPath || !active) return
+
+    // Tagging twenty photos and then opening this tab costs one refresh, not twenty.
+    const signature = `${rootPath}|${refreshKey}`
+    if (loadedFor.current === signature) return
+    loadedFor.current = signature
+
     setLoading(true)
     mediaApi.getLibraryStats(rootPath)
       .then(r => setStats(r.data))
+      // Let a failed load be retried rather than remembered as done.
+      .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
-  }, [rootPath])
+  }, [rootPath, refreshKey, active])
 
   if (!rootPath) return (
     <Box sx={{ p: 3, textAlign: 'center' }}>
@@ -93,14 +110,15 @@ export function LibraryPanel({ rootPath, onFilter }: Props) {
                     }}
                   >
                     {item.coverPath ? (
-                      <CardMedia
-                        component="img"
-                        image={mediaApi.getThumbnailUrl(item.coverPath)}
-                        alt={item.name}
-                        sx={{ height: 80, objectFit: 'cover' }}
-                      />
+                      <Box sx={{ height: COVER_HEIGHT }}>
+                        <Thumbnail
+                          src={mediaApi.getThumbnailUrl(item.coverPath, THUMB_SIZE)}
+                          alt={item.name}
+                          iconSize={24}
+                        />
+                      </Box>
                     ) : (
-                      <Box sx={{ height: 80, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Box sx={{ height: COVER_HEIGHT, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {current.icon}
                       </Box>
                     )}

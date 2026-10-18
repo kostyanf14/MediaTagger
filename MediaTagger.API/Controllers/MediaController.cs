@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 using MediaTagger.API.Models;
 using MediaTagger.API.Services;
+using Microsoft.VisualBasic.FileIO;
+using System.Diagnostics;
 
 namespace MediaTagger.API.Controllers;
 
@@ -10,169 +13,195 @@ public class MediaController : ControllerBase
 {
     private readonly FileSystemService _fs;
     private readonly TagsService _tags;
+    private readonly ThumbnailService _thumbnails;
+    private readonly ScanProgress _progress;
 
-    public MediaController(FileSystemService fs, TagsService tags)
+    public MediaController(FileSystemService fs, TagsService tags, ThumbnailService thumbnails, ScanProgress progress)
     {
         _fs = fs;
         _tags = tags;
+        _thumbnails = thumbnails;
+        _progress = progress;
     }
 
     [HttpGet("files")]
     public ActionResult<List<MediaFile>> GetFiles([FromQuery] string folderPath, [FromQuery] bool recursive = false)
     {
-        if (!Directory.Exists(folderPath))
-            return BadRequest("Folder not found");
+        if (!Directory.Exists(folderPath)) return BadRequest("Folder not found");
         return Ok(_fs.GetMediaFiles(folderPath, recursive));
     }
 
     [HttpGet("folder-tree")]
     public ActionResult<FolderNode> GetFolderTree([FromQuery] string rootPath)
     {
-        if (!Directory.Exists(rootPath))
-            return BadRequest("Folder not found");
+        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
         return Ok(_fs.GetFolderTree(rootPath));
     }
 
     [HttpPut("tags")]
     public ActionResult UpdateTags([FromBody] UpdateTagsRequest request)
     {
-        if (!System.IO.File.Exists(request.FilePath))
-            return BadRequest("File not found");
+        if (!System.IO.File.Exists(request.FilePath)) return BadRequest("File not found");
         _tags.UpdateFileTags(request.FilePath, request.Tags);
         return Ok();
     }
 
+    /// <summary>Adds tags to a whole selection without disturbing their other fields.</summary>
+    [HttpPut("tags/bulk")]
+    public ActionResult<int> BulkAddTags([FromBody] BulkTagsRequest request)
+    {
+        var existing = request.FilePaths.Where(System.IO.File.Exists).ToList();
+        if (existing.Count == 0) return BadRequest("None of the files exist");
+        return Ok(_tags.AddTagsToFiles(existing, request));
+    }
+
+    /// <summary>How far the running scan has got, for the indexing bar.</summary>
+    [HttpGet("scan-progress")]
+    public ActionResult<ScanProgressSnapshot> GetScanProgress() => Ok(_progress.Snapshot());
+
+    /// <summary>Lets the client skip a remembered folder whose drive is not plugged in.</summary>
+    [HttpGet("folder-exists")]
+    public ActionResult<bool> FolderExists([FromQuery] string folderPath)
+        => Ok(!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath));
+
     [HttpDelete("file")]
     public ActionResult DeleteFile([FromQuery] string filePath)
     {
-        if (!System.IO.File.Exists(filePath))
-            return NotFound("File not found");
+        if (!System.IO.File.Exists(filePath)) return NotFound();
         try
         {
-            // Remove from _tags.json first
-            var folder = Path.GetDirectoryName(filePath) ?? "";
-            var fileName = Path.GetFileName(filePath);
-            var tagsFile = _tags.ReadTagsFile(folder);
-            if (tagsFile.Files.ContainsKey(fileName))
-            {
-                tagsFile.Files.Remove(fileName);
-                _tags.WriteTagsFile(folder, tagsFile);
-            }
-            // Move to recycle bin / trash via shell (safer than File.Delete)
-            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
-                filePath,
-                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            _tags.RemoveFileTags(filePath);
+
+            SendToTrash(filePath);
+            _fs.InvalidateFolder(Path.GetDirectoryName(filePath) ?? "");
             return Ok();
         }
-        catch (Exception ex)
+        catch (Exception ex) { return StatusCode(500, ex.Message); }
+    }
+
+    private static void SendToTrash(string filePath)
+    {
+        if (OperatingSystem.IsWindows())
         {
-            return StatusCode(500, ex.Message);
+            // The same call a PowerShell one-liner would make, without paying for
+            // a PowerShell start-up on every delete.
+            FileSystem.DeleteFile(filePath, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            var escapedPath = filePath.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            var psi = new ProcessStartInfo
+            {
+                FileName = "osascript",
+                Arguments = "-e \"tell application \\\"Finder\\\" to delete POSIX file \\\"" + escapedPath + "\\\"\"",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            Process.Start(psi)?.WaitForExit(10000);
+        }
+        else
+        {
+            System.IO.File.Delete(filePath);
         }
     }
 
     [HttpPost("search")]
     public ActionResult<List<MediaFile>> Search([FromBody] SearchRequest request)
     {
-        if (!Directory.Exists(request.RootPath))
-            return BadRequest("Root path not found");
+        if (!Directory.Exists(request.RootPath)) return BadRequest("Root path not found");
         return Ok(_fs.Search(request));
     }
 
     [HttpGet("all-tags")]
     public ActionResult<AllTagsResponse> GetAllTags([FromQuery] string rootPath)
     {
-        if (!Directory.Exists(rootPath))
-            return BadRequest("Folder not found");
-        return Ok(_tags.GetAllTags(rootPath));
+        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
+        return Ok(_fs.GetAllTags(rootPath));
     }
 
+    /// <summary>
+    /// Preview image for a file. <paramref name="maxSize"/> bounds the longest edge —
+    /// grids should always pass it so a 20 MB photo is not shipped for a 200 px tile.
+    /// Omit it (or pass 0) to get the original, which is what the lightbox wants.
+    /// </summary>
     [HttpGet("thumbnail")]
-    public IActionResult GetThumbnail([FromQuery] string filePath)
+    public async Task<IActionResult> GetThumbnail([FromQuery] string filePath, [FromQuery] int maxSize = 0,
+        CancellationToken cancel = default)
     {
-        if (!System.IO.File.Exists(filePath))
-            return NotFound();
+        if (!System.IO.File.Exists(filePath)) return NotFound();
+
+        if (maxSize > 0) maxSize = Math.Clamp(maxSize, 64, 2048);
+
+        string? cached;
+        try { cached = await _thumbnails.GetThumbnailPath(filePath, maxSize, cancel); }
+        // The tile this was for is gone; nobody is waiting on an answer.
+        catch (OperationCanceledException) { return new EmptyResult(); }
+        if (cached != null) return CacheableFile(cached, "image/jpeg");
+
+        // Nothing cached: fine for JPEG/PNG (the browser decodes the original),
+        // but HEIC and video are unreadable without the conversion that just failed.
+        if (_thumbnails.NeedsConversion(filePath)) return NotFound("Thumbnail unavailable");
 
         var ext = Path.GetExtension(filePath).ToLower();
-
-        // Convert HEIC to JPEG on-the-fly for preview
-        if (ext == ".heic" || ext == ".heif")
-        {
-            try
-            {
-                var converted = ConvertHeicToJpeg(filePath);
-                return File(converted, "image/jpeg");
-            }
-            catch
-            {
-                return NotFound("HEIC conversion failed");
-            }
-        }
-
         var contentType = ext switch
         {
             ".jpg" or ".jpeg" => "image/jpeg",
-            ".png"            => "image/png",
-            ".gif"            => "image/gif",
-            ".webp"           => "image/webp",
-            ".bmp"            => "image/bmp",
-            ".mp4"            => "video/mp4",
-            ".mov"            => "video/quicktime",
-            ".webm"           => "video/webm",
-            _                 => "application/octet-stream"
+            ".png"  => "image/png",
+            ".gif"  => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp"  => "image/bmp",
+            _       => "image/jpeg"
         };
-
-        return PhysicalFile(filePath, contentType);
+        return CacheableFile(filePath, contentType);
     }
 
-    private byte[] ConvertHeicToJpeg(string heicPath)
+    /// <summary>Serves a file with validators so revisits come back as 304 instead of a re-download.</summary>
+    private IActionResult CacheableFile(string path, string contentType)
     {
-        // Use ImageMagick if available, otherwise return placeholder
-        var tempJpeg = Path.GetTempFileName() + ".jpg";
-        try
+        FileInfo info;
+        try { info = new FileInfo(path); if (!info.Exists) return NotFound(); }
+        catch { return NotFound(); }
+
+        var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+        Response.Headers.CacheControl = "private, max-age=86400";
+        return PhysicalFile(path, contentType, lastModified: info.LastWriteTimeUtc, entityTag: etag);
+    }
+
+    [HttpGet("stream")]
+    public IActionResult Stream([FromQuery] string filePath)
+    {
+        if (!System.IO.File.Exists(filePath)) return NotFound();
+
+        var ext = Path.GetExtension(filePath).ToLower();
+        var contentType = ext switch
         {
-            var proc = new System.Diagnostics.Process
-            {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "magick",
-                    Arguments = $"\"{heicPath}\" \"{tempJpeg}\"",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-            proc.Start();
-            proc.WaitForExit(5000);
-            if (System.IO.File.Exists(tempJpeg))
-                return System.IO.File.ReadAllBytes(tempJpeg);
-        }
-        finally
-        {
-            if (System.IO.File.Exists(tempJpeg))
-                System.IO.File.Delete(tempJpeg);
-        }
-        throw new Exception("Conversion failed");
+            ".mp4"            => "video/mp4",
+            ".mov"            => "video/mp4",
+            ".webm"           => "video/webm",
+            ".avi"            => "video/x-msvideo",
+            ".mkv"            => "video/x-matroska",
+            ".m4v"            => "video/mp4",
+            ".wmv"            => "video/x-ms-wmv",
+            ".mts" or ".m2ts" => "video/mp2t",
+            _                 => "video/mp4"
+        };
+
+        return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
     }
 
     [HttpGet("map-files")]
     public ActionResult<List<MediaFile>> GetFilesWithCoordinates([FromQuery] string rootPath)
     {
-        if (!Directory.Exists(rootPath))
-            return BadRequest("Folder not found");
-
+        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
         var files = _fs.GetMediaFiles(rootPath, recursive: true)
-            .Where(f => f.Tags.Coordinates != null)
-            .ToList();
-
+            .Where(f => f.Tags.Coordinates != null).ToList();
         return Ok(files);
     }
 
     [HttpGet("library-stats")]
     public ActionResult<LibraryStats> GetLibraryStats([FromQuery] string rootPath)
     {
-        if (!Directory.Exists(rootPath))
-            return BadRequest("Folder not found");
-        return Ok(_tags.GetLibraryStats(rootPath));
+        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
+        return Ok(_fs.GetLibraryStats(rootPath));
     }
 }

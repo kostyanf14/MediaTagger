@@ -2,7 +2,7 @@
 declare global {
   interface Window {
     electronAPI?: {
-      startNativeDrag: (filePath: string, thumbnailPath?: string) => void
+      startNativeDrag: (filePath: string, previewDataUrl?: string) => void
       selectFolder: () => Promise<string | null>
       revealInExplorer: (filePath: string) => void
       openFile: (filePath: string) => void
@@ -18,8 +18,8 @@ export function useElectron() {
   return {
     isElectron,
     selectFolder: () => api?.selectFolder() ?? Promise.resolve(null),
-    startNativeDrag: (filePath: string, thumbnailPath?: string) =>
-      api?.startNativeDrag(filePath, thumbnailPath),
+    startNativeDrag: (filePath: string, previewDataUrl?: string) =>
+      api?.startNativeDrag(filePath, previewDataUrl),
     revealInExplorer: (filePath: string) => api?.revealInExplorer(filePath),
     openFile: (filePath: string) => api?.openFile(filePath)
   }

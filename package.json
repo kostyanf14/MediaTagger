@@ -7,7 +7,9 @@
     "dev": "concurrently --kill-others --names \"API,React,Electron\" --prefix-colors \"cyan,green,magenta\" \"npm run dev:api\" \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:api": "dotnet run --project MediaTagger.API",
     "dev:react": "npm start --prefix mediaTagger.client",
-    "dev:electron": "node wait-and-launch.js"
+    "dev:electron": "node wait-and-launch.js",
+    "build": "npm run build --prefix mediaTagger.client && dotnet publish MediaTagger.API -c Release -o MediaTagger.API/bin/publish",
+    "start": "npm start --prefix MediaTagger.Electron"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
