@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  Box, Typography, Grid, Card, CardContent,
+  Box, Typography, Card,
   Tabs, Tab, Skeleton, Chip, Tooltip
 } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
@@ -10,7 +10,14 @@ import GroupsIcon from '@mui/icons-material/Groups'
 import { mediaApi, LibraryStats, SearchRequest, THUMB_SIZE } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 
-const COVER_HEIGHT = 80
+// Fixed-size squares: covers keep their shape whatever the panel width, and a wide
+// window shows more of them instead of two stretched columns.
+const TILE_SIZE = 150
+const tileGrid = {
+  display: 'grid',
+  gridTemplateColumns: `repeat(auto-fill, ${TILE_SIZE}px)`,
+  gap: 1.5
+} as const
 
 interface Props {
   rootPath: string
@@ -83,58 +90,59 @@ export function LibraryPanel({ rootPath, refreshKey, active, onFilter }: Props) 
 
       <Box sx={{ flex: 1, overflowY: 'auto', p: 1.5 }}>
         {loading ? (
-          <Grid container spacing={1}>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Grid item xs={6} key={i}>
-                <Skeleton variant="rectangular" height={100} sx={{ borderRadius: 1 }} />
-              </Grid>
+          <Box sx={tileGrid}>
+            {Array.from({ length: 12 }).map((_, i) => (
+              <Skeleton key={i} variant="rounded" width={TILE_SIZE} height={TILE_SIZE} />
             ))}
-          </Grid>
+          </Box>
         ) : current.items.length === 0 ? (
           <Typography color="text.secondary" variant="body2" sx={{ textAlign: 'center', mt: 4 }}>
             Немає даних
           </Typography>
         ) : (
-          <Grid container spacing={1}>
+          <Box sx={tileGrid}>
             {current.items.map((item) => (
-              <Grid item xs={6} key={item.name}>
-                <Tooltip title={`Показати всі (${item.count})`}>
-                  <Card
-                    onClick={() => handleItemClick(item.name)}
-                    sx={{
-                      cursor: 'pointer',
-                      bgcolor: 'background.default',
-                      border: '1px solid', borderColor: 'divider',
-                      '&:hover': { borderColor: 'primary.main', transform: 'scale(1.02)' },
-                      transition: 'all 0.15s'
-                    }}
-                  >
-                    {item.coverPath ? (
-                      <Box sx={{ height: COVER_HEIGHT }}>
-                        <Thumbnail
-                          src={mediaApi.getThumbnailUrl(item.coverPath, THUMB_SIZE)}
-                          alt={item.name}
-                          iconSize={24}
-                        />
-                      </Box>
-                    ) : (
-                      <Box sx={{ height: COVER_HEIGHT, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {current.icon}
-                      </Box>
-                    )}
-                    <CardContent sx={{ p: '6px 8px !important' }}>
-                      <Typography variant="caption" fontWeight={600} noWrap display="block">
-                        {item.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {item.count} фото
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Tooltip>
-              </Grid>
+              <Tooltip key={item.name} title={`Показати всі (${item.count})`}>
+                <Card
+                  onClick={() => handleItemClick(item.name)}
+                  sx={{
+                    position: 'relative',
+                    width: TILE_SIZE, height: TILE_SIZE,
+                    cursor: 'pointer',
+                    bgcolor: 'background.default',
+                    border: '1px solid', borderColor: 'divider',
+                    '&:hover': { borderColor: 'primary.main', transform: 'scale(1.02)' },
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  {item.coverPath ? (
+                    <Thumbnail
+                      src={mediaApi.getThumbnailUrl(item.coverPath, THUMB_SIZE)}
+                      alt={item.name}
+                      iconSize={24}
+                    />
+                  ) : (
+                    <Box sx={{ height: '100%', bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {current.icon}
+                    </Box>
+                  )}
+                  {/* Caption over the picture, so the tile stays square */}
+                  <Box sx={{
+                    position: 'absolute', left: 0, right: 0, bottom: 0,
+                    px: 1, pt: 2, pb: 0.75,
+                    background: 'linear-gradient(transparent, rgba(0,0,0,0.85))'
+                  }}>
+                    <Typography variant="caption" fontWeight={600} noWrap display="block" sx={{ color: '#fff' }}>
+                      {item.name}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+                      {item.count} фото
+                    </Typography>
+                  </Box>
+                </Card>
+              </Tooltip>
             ))}
-          </Grid>
+          </Box>
         )}
       </Box>
     </Box>
