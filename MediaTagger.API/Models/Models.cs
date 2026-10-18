@@ -103,3 +103,84 @@ public class AlbumStat  { public string Name { get; set; } = ""; public int Coun
 public class PersonStat { public string Name { get; set; } = ""; public int Count { get; set; } public string? CoverPath { get; set; } }
 public class PlaceStat  { public string Name { get; set; } = ""; public int Count { get; set; } public string? CoverPath { get; set; } }
 public class GroupStat  { public string Name { get; set; } = ""; public int Count { get; set; } public string? CoverPath { get; set; } }
+
+/// <summary>A face in a specific file, with enough to crop it out of that file's thumbnail.</summary>
+public class FaceSuggestion
+{
+    public long FaceId { get; set; }
+    public string FilePath { get; set; } = "";
+    public string FileName { get; set; } = "";
+    public string Type { get; set; } = "image";
+    /// <summary>Box relative (0..1) to the upright picture.</summary>
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float W { get; set; }
+    public float H { get; set; }
+    /// <summary>Pixel size the box was measured on; the UI needs the aspect ratio to crop square.</summary>
+    public int Width { get; set; }
+    public int Height { get; set; }
+    /// <summary>Who it is probably, and how similar (cosine, roughly 0.45 likely … 0.8 certain).</summary>
+    public string Person { get; set; } = "";
+    public float Score { get; set; }
+}
+
+public class PersonSuggestions
+{
+    public string Person { get; set; } = "";
+    /// <summary>All suggestions for this person; <see cref="Items"/> may hold only the best of them.</summary>
+    public int Total { get; set; }
+    public List<FaceSuggestion> Items { get; set; } = new();
+}
+
+public class LearnedPerson
+{
+    public string Name { get; set; } = "";
+    /// <summary>Faces the model has placed as this person.</summary>
+    public int Faces { get; set; }
+    public FaceSuggestion? Cover { get; set; }
+}
+
+public class FaceSuggestionsResponse
+{
+    public List<PersonSuggestions> People { get; set; } = new();
+    public List<LearnedPerson> Learned { get; set; } = new();
+    public int FacesTotal { get; set; }
+}
+
+public class FileFace
+{
+    public long FaceId { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float W { get; set; }
+    public float H { get; set; }
+    /// <summary>Who this is, when the tags (or the user) settled it.</summary>
+    public string? Person { get; set; }
+    /// <summary>Who this might be — someone not tagged on the file yet.</summary>
+    public string? Suggestion { get; set; }
+    public float Score { get; set; }
+}
+
+public class FileFacesResponse
+{
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public List<FileFace> Faces { get; set; } = new();
+}
+
+public class FaceDecision
+{
+    public long FaceId { get; set; }
+    public string FilePath { get; set; } = "";
+    public string Person { get; set; } = "";
+}
+
+public class AcceptFacesRequest
+{
+    public List<FaceDecision> Items { get; set; } = new();
+    /// <summary>
+    /// Also add the person to each file's tags. The side panel writes tags itself and
+    /// passes false; the suggestions view relies on this.
+    /// </summary>
+    public bool ApplyTags { get; set; } = true;
+}

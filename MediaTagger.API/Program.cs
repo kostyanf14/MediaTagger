@@ -13,6 +13,11 @@ builder.Services.AddSingleton<LibraryIndex>();
 builder.Services.AddSingleton<FileSystemService>();
 builder.Services.AddSingleton<ExifService>();
 builder.Services.AddSingleton<ThumbnailService>();
+builder.Services.AddSingleton<FaceStore>();
+builder.Services.AddSingleton<FaceAnalyzer>();
+builder.Services.AddSingleton<FaceIndexer>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FaceIndexer>());
+builder.Services.AddSingleton<FaceRecognitionService>();
 
 builder.Services.AddCors(options =>
 {

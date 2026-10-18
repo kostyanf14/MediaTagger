@@ -45,6 +45,32 @@ export interface BulkTagsRequest {
   place?: string
 }
 
+export interface FaceScanStatus {
+  available: boolean
+  active: boolean
+  root: string
+  processed: number
+  total: number
+}
+/** A face in a file. The box is relative (0..1); width/height are the pixels it was measured on. */
+export interface FaceSuggestion {
+  faceId: number; filePath: string; fileName: string; type: 'image' | 'video'
+  x: number; y: number; w: number; h: number
+  width: number; height: number
+  person: string; score: number
+}
+export interface PersonSuggestions { person: string; total: number; items: FaceSuggestion[] }
+export interface LearnedPerson { name: string; faces: number; cover?: FaceSuggestion }
+export interface FaceSuggestionsResponse {
+  people: PersonSuggestions[]; learned: LearnedPerson[]; facesTotal: number
+}
+export interface FileFace {
+  faceId: number; x: number; y: number; w: number; h: number
+  person?: string; suggestion?: string; score: number
+}
+export interface FileFacesResponse { width: number; height: number; faces: FileFace[] }
+export interface FaceDecision { faceId: number; filePath: string; person: string }
+
 // Two preview sizes cover the whole app. Every view that shows a tile-sized picture
 // asks for the same one, so it is made once and then comes out of the browser cache;
 // the server cuts the small one from it rather than from the original.
@@ -86,6 +112,27 @@ export const mediaApi = {
   // Stream — for video playback, supports HTTP Range (seeking)
   getStreamUrl: (filePath: string) =>
     `http://localhost:5001/api/media/stream?filePath=${encodeURIComponent(filePath)}`
+}
+
+export const facesApi = {
+  // Idempotent: files already analysed are skipped, so this is safe to call on every open.
+  scan: (rootPath: string) =>
+    api.post<FaceScanStatus>('/faces/scan', null, { params: { rootPath } }),
+  stop: () => api.post<FaceScanStatus>('/faces/stop'),
+  status: () => api.get<FaceScanStatus>('/faces/status'),
+  suggestions: (rootPath: string, perPerson?: number) =>
+    api.get<FaceSuggestionsResponse>('/faces/suggestions', { params: { rootPath, perPerson } }),
+  file: (rootPath: string, filePath: string) =>
+    api.get<FileFacesResponse>('/faces/file', { params: { rootPath, filePath } }),
+  // applyTags=false when the caller writes the tags itself (the side panel does).
+  accept: (items: FaceDecision[], applyTags = true) =>
+    api.post<number>('/faces/accept', { items, applyTags }),
+  reject: (items: FaceDecision[]) =>
+    api.post<number>('/faces/reject', items),
+  // A square JPEG around one face, cut from the file's thumbnail.
+  getCropUrl: (filePath: string, box: { x: number; y: number; w: number; h: number }, size: number) =>
+    `http://localhost:5001/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
+    `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}`
 }
 
 export const settingsApi = {

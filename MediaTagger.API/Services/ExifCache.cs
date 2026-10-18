@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
-using System.Text;
 using MediaTagger.API.Models;
 using Microsoft.Data.Sqlite;
 
@@ -19,9 +17,6 @@ public class ExifCache : IDisposable
     private readonly SqliteConnection _connection;
     private readonly ILogger<ExifCache> _logger;
     private readonly object _gate = new();
-
-    // Volume serials never change, so each root only has to be asked once.
-    private readonly ConcurrentDictionary<string, string> _volumeIds = new(StringComparer.OrdinalIgnoreCase);
 
     // The whole table, mirrored. A library scan asks about every file it sees, and a
     // dictionary answers that without a query (or a lock) per file; the database is
@@ -89,7 +84,7 @@ public class ExifCache : IDisposable
     /// </summary>
     public ExifData? GetOrRead(string filePath, FileInfo info, Func<string, ExifData?> read)
     {
-        var key = BuildKey(filePath);
+        var key = VolumeKey.For(filePath);
         var mtime = info.LastWriteTimeUtc.Ticks;
 
         // A file that changed size or timestamp has to be read again.
@@ -155,52 +150,6 @@ public class ExifCache : IDisposable
         p["$camera"].Value = (object?)data?.Camera ?? DBNull.Value;
         _upsertCommand.ExecuteNonQuery();
     }
-
-    /// <summary>
-    /// Splits a path into the volume it lives on and the part below that volume's root.
-    /// Keying on the volume's serial rather than its drive letter means an external disk
-    /// that comes back as G: instead of E: still finds its own entries.
-    /// </summary>
-    private (string Volume, string Path) BuildKey(string filePath)
-    {
-        string full;
-        try { full = Path.GetFullPath(filePath); } catch { full = filePath; }
-
-        var root = Path.GetPathRoot(full);
-        if (string.IsNullOrEmpty(root)) return ("", full.ToLowerInvariant());
-
-        var volume = _volumeIds.GetOrAdd(root, ReadVolumeId);
-        var relative = full[root.Length..];
-        return (volume, relative.ToLowerInvariant());
-    }
-
-    private static string ReadVolumeId(string root)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            try
-            {
-                var label = new StringBuilder(261);
-                var fileSystem = new StringBuilder(261);
-                if (GetVolumeInformation(root, label, label.Capacity, out var serial,
-                        out _, out _, fileSystem, fileSystem.Capacity) && serial != 0)
-                    return serial.ToString("X8");
-            }
-            catch { /* fall through to the path form below */ }
-        }
-
-        // Network shares and anything without a serial fall back to the root itself,
-        // which is stable enough as long as the share is mounted the same way.
-        return root.ToLowerInvariant();
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetVolumeInformation(
-        string rootPathName,
-        StringBuilder volumeNameBuffer, int volumeNameSize,
-        out uint volumeSerialNumber, out uint maximumComponentLength, out uint fileSystemFlags,
-        StringBuilder fileSystemNameBuffer, int fileSystemNameSize);
 
     private void Execute(string sql)
     {

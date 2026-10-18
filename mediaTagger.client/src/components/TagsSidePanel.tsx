@@ -12,6 +12,7 @@ import MapIcon from '@mui/icons-material/Map'
 import { MediaFile, FileTags, Coordinates, BulkTagsRequest, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { CoordinatePicker } from './CoordinatePicker'
 import { Thumbnail } from './Thumbnail'
+import { PhotoFaces } from './PhotoFaces'
 import { useElectron } from '../hooks/useElectron'
 
 // Long enough that adding three tags in a row is one write, short enough that
@@ -29,6 +30,8 @@ interface Props {
   /** Fired after a tag chip saved itself, so the grid can catch up without a rescan. */
   onAutoSaved?: (filePath: string, tags: FileTags) => void
   allTags: { people: string[]; groups: string[]; albums: string[]; places: string[] }
+  /** The open library; face suggestions are learned from the tags across all of it. */
+  rootPath: string
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -53,7 +56,7 @@ function parseCoordinates(text: string): Coordinates | null {
   return { lat, lng }
 }
 
-export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags }: Props) {
+export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, rootPath }: Props) {
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
   const { revealInExplorer, openFile } = useElectron()
@@ -413,6 +416,14 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               renderInput={(params) => (
                 <TextField {...params} label="Люди" size="small" placeholder="Додати людину..." />
               )}
+            />
+
+            <PhotoFaces
+              rootPath={rootPath}
+              file={file}
+              people={tags.people}
+              allPeople={allTags.people}
+              onAddPerson={person => applyTagChange({ people: [...tags.people, person] })}
             />
 
             <Autocomplete

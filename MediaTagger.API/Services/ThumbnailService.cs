@@ -27,6 +27,8 @@ public class ThumbnailService
     /// </summary>
     private const int BaseSize = 480;
     /// <summary>The cache is trimmed back under this on startup, oldest entries first.</summary>
+    /// <summary>Rendition small faces are cropped from; matches what face analysis looks at.</summary>
+    private const int FaceSourceSize = 1280;
     private const long CacheLimitBytes = 2L * 1024 * 1024 * 1024;
 
     private readonly string _cacheDir;
@@ -157,6 +159,38 @@ public class ThumbnailService
             if (gate.CurrentCount == 1)
                 _entryLocks.TryRemove(new KeyValuePair<string, SemaphoreSlim>(cachePath, gate));
         }
+    }
+
+    /// <summary>
+    /// A square JPEG around a face (box relative to the upright picture), for the face
+    /// pickers. Big faces are cut from the grid thumbnail, which usually exists already;
+    /// small ones need the detail of a larger rendition.
+    /// </summary>
+    public async Task<byte[]?> GetFaceCropAsync(string filePath, float x, float y, float w, float h, int size,
+        CancellationToken cancel = default)
+    {
+        var sourceSize = Math.Max(w, h) * BaseSize >= size * 0.75 ? BaseSize : FaceSourceSize;
+        var source = await GetThumbnailPath(filePath, sourceSize, cancel);
+        if (source == null) return null;
+
+        return await Task.Run(() =>
+        {
+            using var image = new MagickImage(source);
+            var cx = (x + w / 2) * image.Width;
+            var cy = (y + h / 2) * image.Height;
+            // Some room around the face reads better than a tight box, and never
+            // more than the picture itself has.
+            var side = Math.Min(Math.Max(w * image.Width, h * image.Height) * 1.5f, Math.Min(image.Width, image.Height));
+            var left = Math.Clamp(cx - side / 2, 0, image.Width - side);
+            var top = Math.Clamp(cy - side / 2, 0, image.Height - side);
+
+            image.Crop(new MagickGeometry((int)left, (int)top, (uint)Math.Max(1, side), (uint)Math.Max(1, side)));
+            image.ResetPage();
+            if (image.Width > size) image.Resize((uint)size, (uint)size);
+            image.Quality = 85;
+            image.Format = MagickFormat.Jpeg;
+            return image.ToByteArray();
+        }, cancel);
     }
 
     private string GetCachePath(string filePath, int maxSize)

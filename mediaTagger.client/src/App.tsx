@@ -12,6 +12,7 @@ import BookmarkIcon from '@mui/icons-material/Bookmark'
 import BookmarkBorderIcon from '@mui/icons-material/BookmarkBorder'
 import HistoryIcon from '@mui/icons-material/History'
 import CollectionsIcon from '@mui/icons-material/Collections'
+import FaceIcon from '@mui/icons-material/Face'
 import { FolderTreeNode } from './components/FolderTree'
 import { MediaGallery } from './components/MediaGallery'
 import { TagsSidePanel } from './components/TagsSidePanel'
@@ -19,8 +20,9 @@ import { SearchBar } from './components/SearchBar'
 import { MapView } from './components/MapView'
 import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
+import { FacesPanel } from './components/FacesPanel'
 import {
-  mediaApi, settingsApi, AppSettings, ScanProgress,
+  mediaApi, settingsApi, facesApi, AppSettings, ScanProgress,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
 } from './api/client'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
@@ -91,7 +93,7 @@ export default function App() {
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
   const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [], places: [] })
   const [loadingFiles, setLoadingFiles] = useState(false)
-  const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map
+  const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map 3=faces
   const [isSearching, setIsSearching] = useState(false)
   const [recentAnchor, setRecentAnchor] = useState<null | HTMLElement>(null)
   // Browsing a folder includes everything below it unless the user says otherwise.
@@ -208,6 +210,9 @@ export default function App() {
     loadFolderTree(path)
     loadFiles(path)
     loadAllTags(path)
+    // Finding faces runs in the background and skips files already done, so starting
+    // it on every open is how new photos get picked up.
+    facesApi.scan(path).catch(() => {})
     const base = currentSettings ?? settings
     saveSettings(addToRecent(path, base))
   }, [settings, addToRecent, saveSettings, loadFolderTree, loadFiles, loadAllTags])
@@ -400,6 +405,8 @@ export default function App() {
                 label="Бібліотека" sx={{ minHeight: 44, py: 0 }} />
               <Tab icon={<MapIcon fontSize="small" />} iconPosition="start"
                 label="Мапа" sx={{ minHeight: 44, py: 0 }} />
+              <Tab icon={<FaceIcon fontSize="small" />} iconPosition="start"
+                label="Обличчя" sx={{ minHeight: 44, py: 0 }} />
             </Tabs>
             <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
             {tab === 0 && (
@@ -467,6 +474,12 @@ export default function App() {
                 <MapView rootPath={rootPath} currentFolder={currentFolder}
                   refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp} />
               </Box>
+
+              {/* Faces — suggestions learned from the people already tagged */}
+              <Box sx={{ display: tab === 3 ? 'block' : 'none', height: '100%' }}>
+                <FacesPanel rootPath={rootPath} refreshKey={tagsVersion}
+                  active={tab === 3} onTagsAdded={handleTagsSaved} />
+              </Box>
             </Box>
 
             <TagsSidePanel
@@ -475,6 +488,7 @@ export default function App() {
               onSaved={handleTagsSaved}
               onAutoSaved={handleTagsAutoSaved}
               allTags={allTags}
+              rootPath={rootPath}
             />
           </Box>
         </Box>

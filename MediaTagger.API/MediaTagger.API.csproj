@@ -6,9 +6,11 @@
     <RootNamespace>MediaTagger.API</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="FaceAiSharp.Bundle" Version="0.6.35" />
     <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="15.0.0" />
     <PackageReference Include="MetadataExtractor" Version="2.8.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.26.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     <PackageReference Include="Xabe.FFmpeg" Version="5.2.6" />
   </ItemGroup>
