@@ -18,6 +18,7 @@ builder.Services.AddSingleton<FaceAnalyzer>();
 builder.Services.AddSingleton<FaceIndexer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<FaceIndexer>());
 builder.Services.AddSingleton<FaceRecognitionService>();
+builder.Services.AddSingleton<PlaceSuggestionService>();
 
 builder.Services.AddCors(options =>
 {

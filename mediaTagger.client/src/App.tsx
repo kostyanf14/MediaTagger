@@ -13,6 +13,7 @@ import BookmarkBorderIcon from '@mui/icons-material/BookmarkBorder'
 import HistoryIcon from '@mui/icons-material/History'
 import CollectionsIcon from '@mui/icons-material/Collections'
 import FaceIcon from '@mui/icons-material/Face'
+import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
 import { FolderTreeNode } from './components/FolderTree'
 import { MediaGallery } from './components/MediaGallery'
 import { TagsSidePanel } from './components/TagsSidePanel'
@@ -21,6 +22,7 @@ import { MapView } from './components/MapView'
 import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
 import { FacesPanel } from './components/FacesPanel'
+import { PlacesPanel } from './components/PlacesPanel'
 import {
   mediaApi, settingsApi, facesApi, AppSettings, ScanProgress,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
@@ -93,7 +95,7 @@ export default function App() {
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
   const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [], places: [] })
   const [loadingFiles, setLoadingFiles] = useState(false)
-  const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map 3=faces
+  const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map 3=faces 4=places
   const [isSearching, setIsSearching] = useState(false)
   const [recentAnchor, setRecentAnchor] = useState<null | HTMLElement>(null)
   // Browsing a folder includes everything below it unless the user says otherwise.
@@ -407,6 +409,8 @@ export default function App() {
                 label="Мапа" sx={{ minHeight: 44, py: 0 }} />
               <Tab icon={<FaceIcon fontSize="small" />} iconPosition="start"
                 label="Обличчя" sx={{ minHeight: 44, py: 0 }} />
+              <Tab icon={<AddLocationAltIcon fontSize="small" />} iconPosition="start"
+                label="Місця" sx={{ minHeight: 44, py: 0 }} />
             </Tabs>
             <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
             {tab === 0 && (
@@ -479,6 +483,12 @@ export default function App() {
               <Box sx={{ display: tab === 3 ? 'block' : 'none', height: '100%' }}>
                 <FacesPanel rootPath={rootPath} refreshKey={tagsVersion}
                   active={tab === 3} onTagsAdded={handleTagsSaved} />
+              </Box>
+
+              {/* Places — suggested from places already written on photos taken nearby */}
+              <Box sx={{ display: tab === 4 ? 'block' : 'none', height: '100%' }}>
+                <PlacesPanel rootPath={rootPath} refreshKey={tagsVersion}
+                  active={tab === 4} onTagsAdded={handleTagsSaved} />
               </Box>
             </Box>
 

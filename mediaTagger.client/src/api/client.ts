@@ -1,6 +1,9 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: 'http://localhost:5001/api' })
+// Overridable so a dev API can run beside the installed app, which holds port 5001.
+const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN ?? 'http://localhost:5001'
+
+const api = axios.create({ baseURL: `${API_ORIGIN}/api` })
 
 export interface Coordinates { lat: number; lng: number }
 export interface FileTags {
@@ -71,6 +74,26 @@ export interface FileFace {
 export interface FileFacesResponse { width: number; height: number; faces: FileFace[] }
 export interface FaceDecision { faceId: number; filePath: string; person: string }
 
+export interface PlaceCandidate {
+  place: string
+  /** Share (0..1) of the nearby evidence pointing at this place. */
+  confidence: number
+  /** Metres to the closest photo already tagged with it. */
+  distance: number
+  support: number
+  /** Clear winner with a tagged photo right there. */
+  confident: boolean
+}
+export interface PlaceSuggestion {
+  filePath: string; fileName: string; type: 'image' | 'video'
+  place: string; confidence: number; distance: number; confident: boolean
+  alternatives: string[]
+}
+export interface PlaceSuggestionGroup { place: string; items: PlaceSuggestion[] }
+export interface PlaceSuggestionsResponse {
+  places: PlaceSuggestionGroup[]; knownPlaces: number; unplaced: number
+}
+
 // Two preview sizes cover the whole app. Every view that shows a tile-sized picture
 // asks for the same one, so it is made once and then comes out of the browser cache;
 // the server cuts the small one from it rather than from the original.
@@ -106,12 +129,12 @@ export const mediaApi = {
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which
   // needs the original. The server caches each size separately.
   getThumbnailUrl: (filePath: string, maxSize?: number) =>
-    `http://localhost:5001/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
+    `${API_ORIGIN}/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
     (maxSize ? `&maxSize=${maxSize}` : ''),
 
   // Stream — for video playback, supports HTTP Range (seeking)
   getStreamUrl: (filePath: string) =>
-    `http://localhost:5001/api/media/stream?filePath=${encodeURIComponent(filePath)}`
+    `${API_ORIGIN}/api/media/stream?filePath=${encodeURIComponent(filePath)}`
 }
 
 export const facesApi = {
@@ -131,8 +154,16 @@ export const facesApi = {
     api.post<number>('/faces/reject', items),
   // A square JPEG around one face, cut from the file's thumbnail.
   getCropUrl: (filePath: string, box: { x: number; y: number; w: number; h: number }, size: number) =>
-    `http://localhost:5001/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
+    `${API_ORIGIN}/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
     `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}`
+}
+
+// Accepting a place is a plain bulk tag write — mediaApi.bulkAddTags with `place`.
+export const placesApi = {
+  suggestions: (rootPath: string) =>
+    api.get<PlaceSuggestionsResponse>('/places/suggestions', { params: { rootPath } }),
+  nearby: (rootPath: string, lat: number, lng: number) =>
+    api.get<PlaceCandidate[]>('/places/nearby', { params: { rootPath, lat, lng } })
 }
 
 export const settingsApi = {

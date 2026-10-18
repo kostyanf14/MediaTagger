@@ -184,3 +184,44 @@ public class AcceptFacesRequest
     /// </summary>
     public bool ApplyTags { get; set; } = true;
 }
+
+public class PlaceCandidate
+{
+    public string Place { get; set; } = "";
+    /// <summary>Share (0..1) of the nearby evidence that points at this place.</summary>
+    public double Confidence { get; set; }
+    /// <summary>Metres to the closest photo already tagged with this place.</summary>
+    public double Distance { get; set; }
+    /// <summary>How many of its photos are close enough to count.</summary>
+    public int Support { get; set; }
+    /// <summary>Clear winner with a photo of it right there — safe to apply without looking.</summary>
+    public bool Confident { get; set; }
+}
+
+public class PlaceSuggestion
+{
+    public string FilePath { get; set; } = "";
+    public string FileName { get; set; } = "";
+    public string Type { get; set; } = "image";
+    public string Place { get; set; } = "";
+    public double Confidence { get; set; }
+    public double Distance { get; set; }
+    public bool Confident { get; set; }
+    /// <summary>Runners-up, for spots where several places sit on top of each other.</summary>
+    public List<string> Alternatives { get; set; } = new();
+}
+
+public class PlaceSuggestionGroup
+{
+    public string Place { get; set; } = "";
+    public List<PlaceSuggestion> Items { get; set; } = new();
+}
+
+public class PlaceSuggestionsResponse
+{
+    public List<PlaceSuggestionGroup> Places { get; set; } = new();
+    /// <summary>Places with at least one geotagged photo — what suggestions are made from.</summary>
+    public int KnownPlaces { get; set; }
+    /// <summary>Geotagged photos with no place yet, whether or not anything is near them.</summary>
+    public int Unplaced { get; set; }
+}

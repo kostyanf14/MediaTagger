@@ -13,6 +13,7 @@ import { MediaFile, FileTags, Coordinates, BulkTagsRequest, mediaApi, THUMB_SIZE
 import { CoordinatePicker } from './CoordinatePicker'
 import { Thumbnail } from './Thumbnail'
 import { PhotoFaces } from './PhotoFaces'
+import { PlaceHint } from './PlaceHint'
 import { useElectron } from '../hooks/useElectron'
 
 // Long enough that adding three tags in a row is one write, short enough that
@@ -441,6 +442,13 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               renderInput={(params) => (
                 <TextField {...params} label="Місце" size="small" placeholder="Київ, Хрещатик" />
               )}
+            />
+
+            <PlaceHint
+              rootPath={rootPath}
+              coordinates={parseCoordinates(coordStr) ?? file.exif?.gpsCoordinates ?? null}
+              place={tags.place}
+              onPick={place => applyTagChange({ place })}
             />
 
             <Autocomplete
