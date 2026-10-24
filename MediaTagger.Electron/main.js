@@ -7,10 +7,19 @@ const http = require('http')
 let mainWindow
 let dotnetProcess
 
-const API_URL = 'http://localhost:5001'
+const API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || 'http://localhost:5001').replace(/\/$/, '')
 const CLIENT_URL = process.env.NODE_ENV === 'development'
-  ? 'http://localhost:3000'
+  ? (process.env.MEDIATAGGER_CLIENT_URL || 'http://localhost:3000')
   : `file://${path.join(__dirname, '../mediaTagger.client/build/index.html')}`
+
+function isLoopback(url) {
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return true
+  }
+}
 
 // Where `npm run build` in the repo root publishes the Release API.
 const PUBLISHED_API = path.join(
@@ -24,9 +33,10 @@ function startDotnetApi() {
   // first and runs unoptimised code, so it is only the fallback for a checkout
   // that has not been built yet. Both run from the project folder, which is what
   // the API resolves appsettings.json and its caches against.
+  const apiEnv = { ...process.env, MediaTagger__ListenUrl: API_URL }
   dotnetProcess = fs.existsSync(PUBLISHED_API)
-    ? spawn(PUBLISHED_API, [], { cwd: apiPath, stdio: 'pipe' })
-    : spawn('dotnet', ['run'], { cwd: apiPath, stdio: 'pipe' })
+    ? spawn(PUBLISHED_API, [], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
+    : spawn('dotnet', ['run'], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
   dotnetProcess.stdout.on('data', d => process.stdout.write(`[API] ${d}`))
   dotnetProcess.stderr.on('data', d => process.stderr.write(`[API ERR] ${d}`))
 }
@@ -40,7 +50,8 @@ function waitForApi() {
   const deadline = Date.now() + API_TIMEOUT_MS
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      http.get(`${API_URL}/health`, res => { res.resume(); resolve() })
+      const lib = API_URL.startsWith('https:') ? require('https') : http
+      lib.get(`${API_URL}/health`, res => { res.resume(); resolve() })
         .on('error', () => {
           if (Date.now() < deadline) setTimeout(attempt, API_POLL_MS)
           else reject(new Error('API did not start'))
@@ -152,7 +163,8 @@ ipcMain.on('open-file', (event, filePath) => {
 })
 
 app.whenReady().then(async () => {
-  if (process.env.NODE_ENV !== 'development') startDotnetApi()
+  // A remote API (the NAS) is already running; only a loopback URL is started here.
+  if (process.env.NODE_ENV !== 'development' && isLoopback(API_URL)) startDotnetApi()
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

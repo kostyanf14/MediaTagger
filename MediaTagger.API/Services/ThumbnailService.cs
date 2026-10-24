@@ -45,7 +45,7 @@ public class ThumbnailService
     // what makes thumbnails fail intermittently under load.
     private readonly SemaphoreSlim _workSlots = new(Math.Max(2, Environment.ProcessorCount / 2));
 
-    public ThumbnailService(ILogger<ThumbnailService> logger, CacheLocator locator)
+    public ThumbnailService(ILogger<ThumbnailService> logger, CacheLocator locator, IConfiguration config)
     {
         _logger = logger;
         _cacheDir = locator.GetDirectory(CacheFolderName);
@@ -57,7 +57,10 @@ public class ThumbnailService
         // fan out as well only makes them fight.
         ResourceLimits.Thread = 1;
 
-        var ffmpegDir = FindFfmpegDirectory();
+        var configuredFfmpeg = config["MediaTagger:FfmpegDirectory"];
+        var ffmpegDir = !string.IsNullOrWhiteSpace(configuredFfmpeg)
+            ? configuredFfmpeg
+            : FindFfmpegDirectory();
         if (!string.IsNullOrEmpty(ffmpegDir))
         {
             // Always pin the directory explicitly — leaving it unset makes Xabe resolve

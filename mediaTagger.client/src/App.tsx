@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Box, CssBaseline, ThemeProvider, createTheme, LinearProgress,
-  Typography, Tabs, Tab, Divider, Button,
+  Typography, Tabs, Tab, Divider, Button, TextField,
   Menu, MenuItem, Tooltip, IconButton, Chip
 } from '@mui/material'
 import FolderIcon from '@mui/icons-material/Folder'
@@ -24,7 +24,7 @@ import { LightboxViewer } from './components/LightboxViewer'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import {
-  mediaApi, settingsApi, facesApi, AppSettings, ScanProgress,
+  mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
 } from './api/client'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
@@ -88,6 +88,7 @@ export default function App() {
   const { selectFolder } = useElectron()
   const [settings, setSettings] = useState<AppSettings>({ defaultFolder: '', recentFolders: [] })
   const [rootPath, setRootPath] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
   const [folderTree, setFolderTree] = useState<FolderNode | null>(null)
   const [currentFolder, setCurrentFolder] = useState('')
   const [files, setFiles] = useState<MediaFile[]>([])
@@ -328,10 +329,19 @@ export default function App() {
           </Box>
 
           <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            <Button fullWidth variant="outlined" size="small"
-              startIcon={<FolderIcon />} onClick={handleSelectRoot}>
-              {rootPath ? 'Змінити папку' : 'Відкрити папку'}
-            </Button>
+            {apiIsLocal && (
+              <Button fullWidth variant="outlined" size="small"
+                startIcon={<FolderIcon />} onClick={handleSelectRoot}>
+                {rootPath ? 'Змінити папку' : 'Відкрити папку'}
+              </Button>
+            )}
+            <TextField size="small" fullWidth placeholder="Шлях на сервері" value={pathDraft}
+              onChange={e => setPathDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter' || !pathDraft.trim()) return
+                openFolder(pathDraft.trim())
+                setPathDraft('')
+              }} />
             {settings.recentFolders.length > 0 && (
               <>
                 <Button fullWidth variant="text" size="small"

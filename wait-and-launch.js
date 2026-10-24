@@ -3,16 +3,20 @@ const http = require('http')
 const { spawn } = require('child_process')
 const path = require('path')
 
+const API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || 'http://localhost:5001').replace(/\/$/, '')
+const CLIENT_URL = process.env.MEDIATAGGER_CLIENT_URL || 'http://localhost:3000'
 const URLS = [
-  'http://localhost:3000',
-  'http://localhost:5001/health'
+  CLIENT_URL,
+  `${API_URL}/health`
 ]
 const INTERVAL = 1000
 const TIMEOUT = 120000
 
 function checkUrl(url) {
+  const lib = url.startsWith('https:') ? require('https') : http
   return new Promise((resolve) => {
-    http.get(url, (res) => {
+    lib.get(url, (res) => {
+      res.resume()
       resolve(res.statusCode < 500)
     }).on('error', () => resolve(false))
   })

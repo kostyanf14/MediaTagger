@@ -32,6 +32,13 @@ builder.WebHost.ConfigureKestrel(opts =>
     opts.Limits.MaxRequestBodySize = null;
 });
 
+// Bind address. appsettings and MediaTagger__ListenUrl override this; localhost
+// only accepts clients on the same machine, so a NAS uses http://0.0.0.0:5001.
+var listenUrl = builder.Configuration["MediaTagger:ListenUrl"];
+if (string.IsNullOrWhiteSpace(listenUrl))
+    listenUrl = "http://localhost:5001";
+builder.WebHost.UseUrls(listenUrl);
+
 var app = builder.Build();
 
 app.UseSwagger();
@@ -40,9 +47,4 @@ app.UseCors("ElectronPolicy");
 app.UseStaticFiles();
 app.MapGet("/health", () => Results.Ok("ok"));
 app.MapControllers();
-
-// appsettings.json names the address; the literal only covers a missing config file.
-if (string.IsNullOrEmpty(app.Configuration["Kestrel:Endpoints:Http:Url"]))
-    app.Run("http://localhost:5001");
-else
-    app.Run();
+app.Run();

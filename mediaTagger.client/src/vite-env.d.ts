@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_API_ORIGIN?: string
+  readonly MEDIATAGGER_API_URL?: string
+}
+
 declare module '*.png' {
   const src: string
   export default src

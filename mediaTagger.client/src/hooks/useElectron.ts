@@ -7,6 +7,8 @@ declare global {
       revealInExplorer: (filePath: string) => void
       openFile: (filePath: string) => void
       isElectron: boolean
+      /** Set when this window was launched with MEDIATAGGER_API_URL. */
+      apiOrigin?: string
     }
   }
 }

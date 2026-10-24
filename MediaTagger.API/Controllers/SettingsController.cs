@@ -7,19 +7,24 @@ namespace MediaTagger.API.Controllers;
 [Route("api/[controller]")]
 public class SettingsController : ControllerBase
 {
-    private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "MediaTagger", "settings.json");
-
+    private readonly string _settingsPath;
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+    public SettingsController(IConfiguration config)
+    {
+        var configured = config["MediaTagger:SettingsPath"];
+        _settingsPath = string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MediaTagger", "settings.json")
+            : configured;
+    }
 
     private AppSettings LoadSettings()
     {
         try
         {
-            if (System.IO.File.Exists(SettingsPath))
+            if (System.IO.File.Exists(_settingsPath))
             {
-                var json = System.IO.File.ReadAllText(SettingsPath);
+                var json = System.IO.File.ReadAllText(_settingsPath);
                 return JsonSerializer.Deserialize<AppSettings>(json, JsonOpts) ?? new AppSettings();
             }
         }
@@ -29,8 +34,8 @@ public class SettingsController : ControllerBase
 
     private void SaveSettings(AppSettings settings)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-        System.IO.File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, JsonOpts));
+        Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+        System.IO.File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings, JsonOpts));
     }
 
     [HttpGet]

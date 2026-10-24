@@ -1,7 +1,25 @@
 import axios from 'axios'
 
-// Overridable so a dev API can run beside the installed app, which holds port 5001.
-const API_ORIGIN: string = import.meta.env.VITE_API_ORIGIN ?? 'http://localhost:5001'
+// Where the UI calls the API. Electron's runtime value wins (a packaged app
+// pointed at a NAS), then the Vite env, then this machine.
+const API_ORIGIN: string = (
+  (typeof window !== 'undefined' ? window.electronAPI?.apiOrigin : undefined) ||
+  import.meta.env.MEDIATAGGER_API_URL ||
+  import.meta.env.VITE_API_ORIGIN ||
+  'http://localhost:5001'
+).replace(/\/$/, '')
+
+function apiHostIsLocal(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return true
+  }
+}
+
+/** False when MEDIATAGGER_API_URL (or the Electron override) points at another machine. */
+export const apiIsLocal = apiHostIsLocal(API_ORIGIN)
 
 const api = axios.create({ baseURL: `${API_ORIGIN}/api` })
 

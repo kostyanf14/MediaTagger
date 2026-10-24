@@ -11,10 +11,19 @@ public class CacheLocator
     private readonly string _root;
     private readonly ILogger<CacheLocator> _logger;
 
-    public CacheLocator(IHostEnvironment env, ILogger<CacheLocator> logger)
+    public CacheLocator(IHostEnvironment env, IConfiguration config, ILogger<CacheLocator> logger)
     {
         _logger = logger;
-        _root = ResolveRoot(env);
+        var configured = config["MediaTagger:CacheRoot"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            _root = Path.GetFullPath(configured);
+            Directory.CreateDirectory(_root);
+        }
+        else
+        {
+            _root = ResolveRoot(env);
+        }
         _logger.LogInformation("Cache root: {Path}", _root);
     }
 

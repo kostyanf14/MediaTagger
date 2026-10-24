@@ -58,7 +58,7 @@ npm install
 ```bash
 cd MediaTagger.API
 dotnet run
-# Запускається на http://localhost:5000
+# Запускається на http://localhost:5001
 ```
 
 **Термінал 2 — React:**
@@ -214,4 +214,58 @@ npm run build
 npm start
 ```
 
-Electron сам стартує опублікований API з `MediaTagger.API/bin/publish`; якщо його ще немає — використає `dotnet run`.
+Electron сам стартує опублікований API з `MediaTagger.API/bin/publish`; якщо його ще немає — використає `dotnet run`. Якщо `MEDIATAGGER_API_URL` вказує на іншу машину, локальний API не запускається — див. розділ нижче.
+
+---
+
+## API на NAS, застосунок на ПК
+
+API і медіафайли працюють на NAS, вікно MediaTagger — на комп'ютері. За замовчуванням усе слухає `localhost`, тож на одному комп'ютері нічого змінювати не треба. На NAS адреса `localhost` приймає з'єднання лише з самого NAS, тому її треба відкрити на всі інтерфейси.
+
+### NAS — тільки API
+
+Потрібен .NET 8 SDK (або вже опублікована збірка `dotnet publish`). FFmpeg на NAS потрібен для мініатюр відео та HEIC.
+
+Параметри — у `MediaTagger.API/appsettings.json`, секція `MediaTagger`. Змінні середовища перекривають файл:
+
+| Параметр | Змінна середовища | За замовчуванням |
+|----------|-------------------|------------------|
+| Адреса, яку слухає API | `MediaTagger__ListenUrl` | `http://localhost:5001` |
+| Каталог кешу (мініатюри, бази облич та EXIF) | `MediaTagger__CacheRoot` | поруч із репозиторієм, інакше LocalAppData |
+| Файл налаштувань (останні папки) | `MediaTagger__SettingsPath` | `%AppData%/MediaTagger/settings.json` |
+| Каталог із FFmpeg | `MediaTagger__FfmpegDirectory` | пошук у PATH |
+
+```bash
+export MediaTagger__ListenUrl=http://0.0.0.0:5001
+# за потреби:
+# export MediaTagger__CacheRoot=/volume1/@MediaTagger/cache
+# export MediaTagger__SettingsPath=/volume1/@MediaTagger/settings.json
+# export MediaTagger__FfmpegDirectory=/usr/bin
+
+cd MediaTagger.API
+dotnet run
+```
+
+У PowerShell та сама змінна: `$env:MediaTagger__ListenUrl = "http://0.0.0.0:5001"`.
+
+Перевірка з ПК: відкрийте `http://<ip-nas>:5001/health` — відповідь має бути `ok`.
+
+### ПК — вікно застосунку
+
+Node.js і залежності React та Electron ставляться як у розділі встановлення. API на ПК не запускайте: `npm run dev` піднімає ще й локальний API, тому тут він не підходить.
+
+PowerShell:
+
+```powershell
+$env:MEDIATAGGER_API_URL = "http://<ip-nas>:5001"
+npm run dev:react
+npm run dev:electron
+```
+
+`MEDIATAGGER_CLIENT_URL` — адреса вікна React, за замовчуванням `http://localhost:3000`.
+
+Зібраний Electron (`npm start` після `npm run build`) читає ту саму `MEDIATAGGER_API_URL`. Якщо хост у ній не `localhost`, локальний API не стартує.
+
+### Папка з фото
+
+Шлях має бути таким, яким його бачить NAS (наприклад `/volume1/photo`), а не буква диска на ПК. У бічній панелі введіть його в поле **Шлях на сервері** і натисніть Enter. Кнопка «Відкрити папку» при цьому схована: вона обирає теку на комп'ютері, і NAS її не прочитає.
