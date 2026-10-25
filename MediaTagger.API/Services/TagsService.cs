@@ -96,6 +96,91 @@ public class TagsService
         return result;
     }
 
+    /// <summary>
+    /// Rewrites people tags under <paramref name="roots"/> so every name in <paramref name="from"/>
+    /// becomes <paramref name="to"/>. One file keeps a single copy of the new name.
+    /// </summary>
+    public int RenamePeople(IEnumerable<string> roots, IEnumerable<string> from, string to)
+    {
+        var sources = new HashSet<string>(
+            from.Select(s => s.Trim()).Where(s => s.Length > 0), StringComparer.OrdinalIgnoreCase);
+        var target = to.Trim();
+        if (sources.Count == 0 || target.Length == 0) return 0;
+
+        var folders = 0;
+        foreach (var root in FileSystemService.Collapse(roots))
+        {
+            foreach (var folder in FoldersWithTags(root))
+            {
+                lock (_writeGate)
+                {
+                    var tagsFile = ReadTagsFile(folder);
+                    var changed = false;
+                    foreach (var tags in tagsFile.Files.Values)
+                    {
+                        if (tags.People == null || ReplacePeople(tags.People, sources, target) is not { } next) continue;
+                        tags.People = next;
+                        changed = true;
+                    }
+                    if (!changed) continue;
+                    WriteTagsFile(folder, tagsFile);
+                    folders++;
+                }
+            }
+        }
+        return folders;
+    }
+
+    /// <summary>The rewritten list, or null when this file does not use any of the old names.</summary>
+    internal static List<string>? ReplacePeople(List<string> people, HashSet<string> sources, string target)
+    {
+        var hit = false;
+        foreach (var person in people)
+            if (sources.Contains(person)) { hit = true; break; }
+        if (!hit) return null;
+
+        var result = new List<string>(people.Count);
+        var placed = false;
+        foreach (var person in people)
+        {
+            if (sources.Contains(person) || person.Equals(target, StringComparison.OrdinalIgnoreCase))
+            {
+                if (placed) continue;
+                result.Add(target);
+                placed = true;
+            }
+            else result.Add(person);
+        }
+        return result.SequenceEqual(people) ? null : result;
+    }
+
+    private static IEnumerable<string> FoldersWithTags(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var dir = pending.Pop();
+            IEnumerable<string> entries;
+            try { entries = Directory.EnumerateFileSystemEntries(dir); }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { continue; }
+
+            foreach (var entry in entries)
+            {
+                FileAttributes attr;
+                try { attr = File.GetAttributes(entry); }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { continue; }
+
+                if ((attr & FileAttributes.Directory) != 0)
+                {
+                    if ((attr & FileAttributes.ReparsePoint) == 0) pending.Push(entry);
+                }
+                else if (Path.GetFileName(entry).Equals(TagsFileName, StringComparison.OrdinalIgnoreCase))
+                    yield return dir;
+            }
+        }
+    }
+
     public void UpdateFileTags(string filePath, FileTags tags)
     {
         var folder = Path.GetDirectoryName(filePath) ?? "";

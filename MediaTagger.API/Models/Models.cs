@@ -177,6 +177,14 @@ public class FaceDecision
     public string Person { get; set; } = "";
 }
 
+/// <summary>Every name in <see cref="From"/> becomes <see cref="To"/>, in tags and on confirmed faces.</summary>
+public class RenamePeopleRequest
+{
+    public List<string> RootPaths { get; set; } = new();
+    public List<string> From { get; set; } = new();
+    public string To { get; set; } = "";
+}
+
 public class AcceptFacesRequest
 {
     public List<FaceDecision> Items { get; set; } = new();

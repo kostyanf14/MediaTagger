@@ -407,6 +407,30 @@ export default function App() {
     handleSearch(req)
   }
 
+  // A renamed person is the same change on every photo that had one of the old names.
+  const handlePeopleRenamed = useCallback((from: string[], to: string) => {
+    const sources = new Set(from.map(n => n.toLowerCase()))
+    const target = to.trim()
+    setFiles(prev => prev.map(f => {
+      if (!f.tags.people.some(p => sources.has(p.toLowerCase()))) return f
+      const people: string[] = []
+      let placed = false
+      for (const person of f.tags.people) {
+        if (sources.has(person.toLowerCase()) || person.toLowerCase() === target.toLowerCase()) {
+          if (placed) continue
+          people.push(target)
+          placed = true
+        } else people.push(person)
+      }
+      return { ...f, tags: { ...f.tags, people } }
+    }))
+    setAllTags(prev => ({
+      ...prev,
+      people: withSuggestions(prev.people.filter(p => !sources.has(p.toLowerCase())), [target])
+    }))
+    markTagsChanged()
+  }, [markTagsChanged])
+
   const isDefault = !!rootPath && folderKey(settings.defaultFolder) === folderKey(rootPath)
 
   if (access !== 'ready') {
@@ -641,7 +665,7 @@ export default function App() {
               {/* Library — always mounted, hidden when not active */}
               <Box sx={{ display: tab === 1 ? 'block' : 'none', height: '100%' }}>
                 <LibraryPanel roots={libraryRoots} refreshKey={tagsVersion}
-                  active={tab === 1} onFilter={handleLibraryFilter} />
+                  active={tab === 1} onFilter={handleLibraryFilter} onPeopleRenamed={handlePeopleRenamed} />
               </Box>
 
               {/* Map — always mounted, hidden when not active — preserves zoom/pan state */}

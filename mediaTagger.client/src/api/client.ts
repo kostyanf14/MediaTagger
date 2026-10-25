@@ -259,6 +259,9 @@ export const facesApi = {
     api.post<number>('/faces/accept', { items, applyTags }),
   reject: (items: FaceDecision[]) =>
     api.post<number>('/faces/reject', items),
+  // One name, or several folded into one. Tags under the roots and confirmed faces both move.
+  renamePeople: (roots: string | string[], from: string[], to: string) =>
+    api.post<number>('/faces/people', { rootPaths: asRoots(roots), from, to }),
   // A square JPEG around one face, cut from the file's thumbnail.
   getCropUrl: (filePath: string, box: { x: number; y: number; w: number; h: number }, size: number) =>
     withAccessKey(

@@ -110,6 +110,24 @@ public class FacesController : ControllerBase
         return Ok(items.Count);
     }
 
+    /// <summary>Renames people, or folds several names into one. Tags under the roots and confirmed faces both move.</summary>
+    [HttpPost("people")]
+    public ActionResult<int> RenamePeople([FromBody] RenamePeopleRequest request)
+    {
+        var to = request.To?.Trim() ?? "";
+        var from = (request.From ?? new List<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (to.Length == 0 || from.Count == 0) return BadRequest("Name required");
+        if (from.All(n => n.Equals(to, StringComparison.Ordinal))) return Ok(0);
+
+        var folders = _tags.RenamePeople(request.RootPaths ?? new List<string>(), from, to);
+        _store.RenamePeople(from, to);
+        return Ok(folders);
+    }
+
     /// <summary>Turns down suggestions, so the same face is not offered as that person again.</summary>
     [HttpPost("reject")]
     public ActionResult<int> Reject([FromBody] List<FaceDecision> items)
