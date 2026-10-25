@@ -58,4 +58,41 @@ public class NetworkAccessTests
         Assert.Equal(nas.Certificate.Thumbprint, again.Thumbprint);
         nas.Certificate.Dispose();
     }
+
+    [Fact]
+    public void A_folder_inside_another_root_is_not_listed_twice()
+    {
+        var parent = Directory.CreateTempSubdirectory("mt-roots-").FullName;
+        var child = Directory.CreateDirectory(Path.Combine(parent, "child")).FullName;
+        var other = Directory.CreateTempSubdirectory("mt-roots-b-").FullName;
+        var collapsed = FileSystemService.Collapse(new[] { child, parent, other, parent + Path.DirectorySeparatorChar });
+        Assert.Equal(2, collapsed.Length);
+        Assert.Contains(collapsed, path => path.Equals(Path.TrimEndingDirectorySeparator(parent), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(collapsed, path => path.Equals(Path.TrimEndingDirectorySeparator(other), StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+public class ScanProgressTests
+{
+    [Fact]
+    public void Overlapping_scans_keep_their_own_totals()
+    {
+        var progress = new ScanProgress();
+        var big = progress.Begin("library", 100);
+        var small = progress.Begin("folder", 10);
+        for (var i = 0; i < 40; i++) big.Advance();
+        small.Advance();
+
+        var snap = progress.Snapshot();
+        Assert.True(snap.Active);
+        Assert.Equal(100, snap.Total);
+        Assert.Equal(40, snap.Processed);
+
+        big.Dispose();
+        snap = progress.Snapshot();
+        Assert.Equal(10, snap.Total);
+        Assert.Equal(1, snap.Processed);
+        small.Dispose();
+        Assert.False(progress.Snapshot().Active);
+    }
 }

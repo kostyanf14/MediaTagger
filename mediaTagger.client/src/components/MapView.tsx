@@ -119,10 +119,7 @@ function ClusterLayer({ files, onMarkerClick }: ClusterLayerProps) {
 }
 
 interface Props {
-  rootPath: string
-  // Folder highlighted in the sidebar tree — the map shows only photos under it
-  // (recursively). Falls back to rootPath when nothing is highlighted yet.
-  currentFolder: string
+  roots: string[]
   /** Bumped when tags change; coordinates are tags, so the pins go stale too. */
   refreshKey: number
   /** Only the visible tab refetches. */
@@ -130,7 +127,7 @@ interface Props {
   onShowInApp?: (file: MediaFile) => void
 }
 
-export function MapView({ rootPath, currentFolder, refreshKey, active, onShowInApp }: Props) {
+export function MapView({ roots, refreshKey, active, onShowInApp }: Props) {
   const [files, setFiles] = useState<MediaFile[]>([])
   const [loading, setLoading] = useState(false)
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
@@ -164,7 +161,7 @@ export function MapView({ rootPath, currentFolder, refreshKey, active, onShowInA
     if (mapRef.current) fitToFiles(mapRef.current)
   }, [fitToFiles])
 
-  const folderPath = currentFolder || rootPath
+  const folderPath = roots.join('\n')
 
   // What the pins currently on the map were built from.
   const loadedFor = useRef<string | null>(null)
@@ -177,12 +174,12 @@ export function MapView({ rootPath, currentFolder, refreshKey, active, onShowInA
     loadedFor.current = signature
 
     setLoading(true)
-    mediaApi.getMapFiles(folderPath)
+    mediaApi.getMapFiles(roots)
       .then(r => { setFiles(r.data); setFilesFolder(folderPath) })
       // Let a failed load be retried rather than remembered as done.
       .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
-  }, [folderPath, refreshKey, active])
+  }, [folderPath, roots, refreshKey, active])
 
   const handleMarkerClick = useCallback((file: MediaFile) => {
     // Snapshot current view right before opening lightbox

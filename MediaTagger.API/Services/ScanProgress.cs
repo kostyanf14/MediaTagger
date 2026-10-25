@@ -7,50 +7,71 @@ namespace MediaTagger.API.Services;
 /// </summary>
 public class ScanProgress
 {
-    private long _processed;
-    private long _total;
-    private int _active;
-    private string _folder = "";
+    private readonly object _gate = new();
+    private readonly List<Job> _jobs = new();
+
+    internal sealed class Job
+    {
+        public string Folder = "";
+        public long Total;
+        public long Processed;
+    }
 
     /// <summary>Starts reporting for a scan; dispose the scope when it finishes.</summary>
     public ScanScope Begin(string folder, int total)
     {
-        // Last scan wins. Requests overlap rarely, and when they do the newest one is
-        // the one the user is waiting on.
-        Interlocked.Exchange(ref _processed, 0);
-        Interlocked.Exchange(ref _total, total);
-        Interlocked.Increment(ref _active);
-        _folder = folder;
-        return new ScanScope(this);
+        var job = new Job { Folder = folder, Total = total };
+        lock (_gate) _jobs.Add(job);
+        return new ScanScope(this, job);
     }
 
-    internal void Advance() => Interlocked.Increment(ref _processed);
+    internal void Advance(Job job) => Interlocked.Increment(ref job.Processed);
 
-    internal void End() => Interlocked.Decrement(ref _active);
-
-    public ScanProgressSnapshot Snapshot() => new()
+    internal void End(Job job)
     {
-        Active = Volatile.Read(ref _active) > 0,
-        Processed = Interlocked.Read(ref _processed),
-        Total = Interlocked.Read(ref _total),
-        Folder = _folder
-    };
+        lock (_gate) _jobs.Remove(job);
+    }
+
+    public ScanProgressSnapshot Snapshot()
+    {
+        lock (_gate)
+        {
+            // Several scans overlap (the open folder, the whole library, the face pass).
+            // They used to share one counter, so a 45-file folder reset the total while
+            // the big scan kept incrementing it.
+            var job = _jobs.MaxBy(j => j.Total);
+            if (job == null) return new ScanProgressSnapshot();
+            var processed = Interlocked.Read(ref job.Processed);
+            return new ScanProgressSnapshot
+            {
+                Active = true,
+                Processed = Math.Min(processed, job.Total),
+                Total = job.Total,
+                Folder = job.Folder
+            };
+        }
+    }
 }
 
 public sealed class ScanScope : IDisposable
 {
     private readonly ScanProgress _owner;
+    private readonly ScanProgress.Job _job;
     private bool _ended;
 
-    internal ScanScope(ScanProgress owner) => _owner = owner;
+    internal ScanScope(ScanProgress owner, ScanProgress.Job job)
+    {
+        _owner = owner;
+        _job = job;
+    }
 
-    public void Advance() => _owner.Advance();
+    public void Advance() => _owner.Advance(_job);
 
     public void Dispose()
     {
         if (_ended) return;
         _ended = true;
-        _owner.End();
+        _owner.End(_job);
     }
 }
 

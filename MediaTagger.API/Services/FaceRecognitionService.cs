@@ -79,9 +79,9 @@ public class FaceRecognitionService
     }
 
     /// <summary>Suggestions for the whole library, grouped by person, best first.</summary>
-    public async Task<FaceSuggestionsResponse> GetSuggestionsAsync(string root, int perPerson)
+    public async Task<FaceSuggestionsResponse> GetSuggestionsAsync(IReadOnlyList<string> roots, int perPerson)
     {
-        var model = await GetModelAsync(root);
+        var model = await GetModelAsync(roots);
         var groups = model.Suggestions
             .GroupBy(s => s.Person, StringComparer.OrdinalIgnoreCase)
             .Select(g => new PersonSuggestions
@@ -102,13 +102,13 @@ public class FaceRecognitionService
     }
 
     /// <summary>Every face in one file, with who it is (or might be).</summary>
-    public async Task<FileFacesResponse> GetFileFacesAsync(string root, MediaFile file)
+    public async Task<FileFacesResponse> GetFileFacesAsync(IReadOnlyList<string> roots, MediaFile file)
     {
         var faces = await _indexer.EnsureAnalyzedAsync(file);
         var response = new FileFacesResponse { Width = faces?.Width ?? 0, Height = faces?.Height ?? 0 };
         if (faces == null || faces.Faces.Length == 0) return response;
 
-        var model = await GetModelAsync(root);
+        var model = await GetModelAsync(roots);
         var tagged = new HashSet<string>(file.Tags.People, StringComparer.OrdinalIgnoreCase);
         var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -157,11 +157,12 @@ public class FaceRecognitionService
     // Faces found, labels and tags all feed the model; any change to them makes it stale.
     private (long Store, long Tags) CurrentVersion => (_store.Version, Interlocked.Read(ref _tagsVersion));
 
-    private async Task<Model> GetModelAsync(string root)
+    private async Task<Model> GetModelAsync(IReadOnlyList<string> roots)
     {
+        var scope = FileSystemService.Scope(roots);
         var version = CurrentVersion;
         var model = _model;
-        if (IsUsable(model, root, version)) return model!;
+        if (IsUsable(model, scope, version)) return model!;
 
         await _buildGate.WaitAsync();
         try
@@ -169,9 +170,9 @@ public class FaceRecognitionService
             // Someone else may have rebuilt it while this request waited.
             model = _model;
             version = CurrentVersion;
-            if (IsUsable(model, root, version)) return model!;
+            if (IsUsable(model, scope, version)) return model!;
 
-            model = await Task.Run(() => Build(root, version));
+            model = await Task.Run(() => Build(roots, scope, version));
             _model = model;
             return model;
         }
@@ -187,13 +188,13 @@ public class FaceRecognitionService
         return _indexer.IsActive && DateTime.UtcNow - model.BuiltAt < StaleAllowance;
     }
 
-    private Model Build(string root, (long Store, long Tags) version)
+    private Model Build(IReadOnlyList<string> roots, string scope, (long Store, long Tags) version)
     {
         var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<Entry>();
         var facesTotal = 0;
 
-        foreach (var file in _fs.GetMediaFiles(root, recursive: true))
+        foreach (var file in _fs.Across(roots))
         {
             var faces = _store.TryGet(file.FilePath, file.Size, FaceIndexer.MtimeOf(file));
             var usable = faces?.Faces.Where(IsUsable).ToArray();
@@ -247,7 +248,7 @@ public class FaceRecognitionService
 
         var model = new Model
         {
-            Root = root,
+            Root = scope,
             Version = version,
             BuiltAt = DateTime.UtcNow,
             Names = names,

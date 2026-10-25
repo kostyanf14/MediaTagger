@@ -81,6 +81,8 @@ public class SearchRequest
     public List<string>? Albums { get; set; }
     public List<string>? Groups { get; set; }
     public string RootPath { get; set; } = "";
+    /// <summary>When set, the search covers each of these instead of <see cref="RootPath"/> alone.</summary>
+    public List<string> RootPaths { get; set; } = new();
 }
 
 public class AllTagsResponse

@@ -8,7 +8,12 @@ namespace MediaTagger.API.Controllers;
 public class SettingsController : ControllerBase
 {
     private readonly string _settingsPath;
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     public SettingsController(IConfiguration config)
     {
@@ -53,4 +58,6 @@ public class AppSettings
 {
     public string DefaultFolder { get; set; } = "";
     public List<string> RecentFolders { get; set; } = new();
+    /// <summary>Photo folders indexed together. Faces, places and the library counts share one database.</summary>
+    public List<string> LibraryFolders { get; set; } = new();
 }

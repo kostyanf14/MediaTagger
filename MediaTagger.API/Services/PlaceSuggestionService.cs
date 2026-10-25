@@ -52,9 +52,9 @@ public class PlaceSuggestionService
     private sealed record Model(string Root, long Version, DateTime BuiltAt, List<Place> Places, List<MediaFile> Unplaced);
 
     /// <summary>Every geotagged photo without a place that has a likely one, grouped by that place.</summary>
-    public PlaceSuggestionsResponse GetSuggestions(string root)
+    public PlaceSuggestionsResponse GetSuggestions(IReadOnlyList<string> roots)
     {
-        var model = GetModel(root);
+        var model = GetModel(roots);
         var suggestions = new List<PlaceSuggestion>();
 
         foreach (var file in model.Unplaced)
@@ -95,8 +95,8 @@ public class PlaceSuggestionService
     }
 
     /// <summary>Likely places for one spot, best first — for a photo being edited, whose pin may be new.</summary>
-    public List<PlaceCandidate> GetNearby(string root, double lat, double lng) =>
-        Rank(GetModel(root), new Point(lat, lng));
+    public List<PlaceCandidate> GetNearby(IReadOnlyList<string> roots, double lat, double lng) =>
+        Rank(GetModel(roots), new Point(lat, lng));
 
     private static List<PlaceCandidate> Rank(Model model, Point at)
     {
@@ -131,28 +131,29 @@ public class PlaceSuggestionService
         return scored.OrderByDescending(c => c.Confidence).Take(3).ToList();
     }
 
-    private Model GetModel(string root)
+    private Model GetModel(IReadOnlyList<string> roots)
     {
+        var scope = FileSystemService.Scope(roots);
         var version = Interlocked.Read(ref _tagsVersion);
         lock (_gate)
         {
             var model = _model;
             if (model != null && model.Version == version && DateTime.UtcNow - model.BuiltAt < MaxModelAge
-                && string.Equals(model.Root, root, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(model.Root, scope, StringComparison.Ordinal))
                 return model;
 
-            _model = model = Build(root, version);
+            _model = model = Build(roots, scope, version);
             return model;
         }
     }
 
-    private Model Build(string root, long version)
+    private Model Build(IReadOnlyList<string> roots, string scope, long version)
     {
         var points = new Dictionary<string, List<Point>>(StringComparer.OrdinalIgnoreCase);
         var spellings = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
         var unplaced = new List<MediaFile>();
 
-        foreach (var file in _fs.GetMediaFiles(root, recursive: true))
+        foreach (var file in _fs.Across(roots))
         {
             var c = file.Tags.Coordinates;
             if (c == null || (c.Lat == 0 && c.Lng == 0)) continue;
@@ -184,7 +185,7 @@ public class PlaceSuggestionService
             return place;
         }).ToList();
 
-        return new Model(root, version, DateTime.UtcNow, places, unplaced);
+        return new Model(scope, version, DateTime.UtcNow, places, unplaced);
     }
 
     /// <summary>Metres between two points. Flat-earth is plenty at the scale of "which café".</summary>

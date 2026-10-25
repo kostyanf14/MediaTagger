@@ -113,6 +113,7 @@ export interface AllTagsResponse { people: string[]; groups: string[]; albums: s
 export interface SearchRequest {
   query?: string; people?: string[]; place?: string
   albums?: string[]; groups?: string[]; rootPath: string
+  rootPaths?: string[]
 }
 export interface AlbumStat  { name: string; count: number; coverPath?: string }
 export interface PersonStat { name: string; count: number; coverPath?: string }
@@ -122,7 +123,7 @@ export interface LibraryStats {
   albums: AlbumStat[]; people: PersonStat[]
   places: PlaceStat[]; groups: GroupStat[]
 }
-export interface AppSettings { defaultFolder: string; recentFolders: string[] }
+export interface AppSettings { defaultFolder: string; recentFolders: string[]; libraryFolders?: string[] }
 export interface ScanProgress {
   active: boolean
   processed: number
@@ -186,6 +187,22 @@ export interface PlaceSuggestionsResponse {
 // Two preview sizes cover the whole app. Every view that shows a tile-sized picture
 // asks for the same one, so it is made once and then comes out of the browser cache;
 // the server cuts the small one from it rather than from the original.
+export function asRoots(root: string | string[] | undefined | null): string[] {
+  if (!root) return []
+  return (Array.isArray(root) ? root : [root]).filter(Boolean)
+}
+
+function rootQuery(root: string | string[], extra?: Record<string, string | number | undefined>) {
+  const params = new URLSearchParams()
+  for (const path of asRoots(root)) params.append('rootPath', path)
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (value !== undefined && value !== '') params.append(key, String(value))
+    }
+  }
+  return params
+}
+
 export const THUMB_SIZE = 480
 export const THUMB_SIZE_SMALL = 160
 
@@ -207,12 +224,12 @@ export const mediaApi = {
     api.delete('/media/file', { params: { filePath } }),
   search: (req: SearchRequest) =>
     api.post<MediaFile[]>('/media/search', req),
-  getAllTags: (rootPath: string) =>
-    api.get<AllTagsResponse>('/media/all-tags', { params: { rootPath } }),
-  getMapFiles: (rootPath: string) =>
-    api.get<MediaFile[]>('/media/map-files', { params: { rootPath } }),
-  getLibraryStats: (rootPath: string) =>
-    api.get<LibraryStats>('/media/library-stats', { params: { rootPath } }),
+  getAllTags: (roots: string | string[]) =>
+    api.get<AllTagsResponse>('/media/all-tags', { params: rootQuery(roots) }),
+  getMapFiles: (roots: string | string[]) =>
+    api.get<MediaFile[]>('/media/map-files', { params: rootQuery(roots) }),
+  getLibraryStats: (roots: string | string[]) =>
+    api.get<LibraryStats>('/media/library-stats', { params: rootQuery(roots) }),
 
   // Thumbnail — JPEG for all formats (HEIC converted, video frame extracted).
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which
@@ -229,14 +246,14 @@ export const mediaApi = {
 
 export const facesApi = {
   // Idempotent: files already analysed are skipped, so this is safe to call on every open.
-  scan: (rootPath: string) =>
-    api.post<FaceScanStatus>('/faces/scan', null, { params: { rootPath } }),
+  scan: (roots: string | string[]) =>
+    api.post<FaceScanStatus>('/faces/scan', null, { params: rootQuery(roots) }),
   stop: () => api.post<FaceScanStatus>('/faces/stop'),
   status: () => api.get<FaceScanStatus>('/faces/status'),
-  suggestions: (rootPath: string, perPerson?: number) =>
-    api.get<FaceSuggestionsResponse>('/faces/suggestions', { params: { rootPath, perPerson } }),
-  file: (rootPath: string, filePath: string) =>
-    api.get<FileFacesResponse>('/faces/file', { params: { rootPath, filePath } }),
+  suggestions: (roots: string | string[], perPerson?: number) =>
+    api.get<FaceSuggestionsResponse>('/faces/suggestions', { params: rootQuery(roots, { perPerson }) }),
+  file: (roots: string | string[], filePath: string) =>
+    api.get<FileFacesResponse>('/faces/file', { params: rootQuery(roots, { filePath }) }),
   // applyTags=false when the caller writes the tags itself (the side panel does).
   accept: (items: FaceDecision[], applyTags = true) =>
     api.post<number>('/faces/accept', { items, applyTags }),
@@ -251,10 +268,10 @@ export const facesApi = {
 
 // Accepting a place is a plain bulk tag write — mediaApi.bulkAddTags with `place`.
 export const placesApi = {
-  suggestions: (rootPath: string) =>
-    api.get<PlaceSuggestionsResponse>('/places/suggestions', { params: { rootPath } }),
-  nearby: (rootPath: string, lat: number, lng: number) =>
-    api.get<PlaceCandidate[]>('/places/nearby', { params: { rootPath, lat, lng } })
+  suggestions: (roots: string | string[]) =>
+    api.get<PlaceSuggestionsResponse>('/places/suggestions', { params: rootQuery(roots) }),
+  nearby: (roots: string | string[], lat: number, lng: number) =>
+    api.get<PlaceCandidate[]>('/places/nearby', { params: rootQuery(roots, { lat, lng }) })
 }
 
 export const settingsApi = {

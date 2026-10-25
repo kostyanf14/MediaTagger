@@ -10,7 +10,7 @@ import { FaceAvatar } from './FaceAvatar'
 const AVATAR_SIZE = 48
 
 interface Props {
-  rootPath: string
+  roots: string[]
   file: MediaFile
   /** The people currently in the editor, which may be ahead of what was saved. */
   people: string[]
@@ -24,7 +24,7 @@ interface Props {
  * The faces found in one photo: who each one is when known, who it might be when
  * the model has a guess, and a way to name the rest — which also teaches the model.
  */
-export function PhotoFaces({ rootPath, file, people, allPeople, onAddPerson }: Props) {
+export function PhotoFaces({ roots, file, people, allPeople, onAddPerson }: Props) {
   const [faces, setFaces] = useState<FileFace[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [naming, setNaming] = useState<{ face: FileFace; anchor: HTMLElement } | null>(null)
@@ -34,15 +34,15 @@ export function PhotoFaces({ rootPath, file, people, allPeople, onAddPerson }: P
   useEffect(() => { setFaces(null) }, [file.filePath])
 
   useEffect(() => {
-    if (!rootPath) return
+    if (!roots.length) return
     let cancelled = false
     setLoading(true)
-    facesApi.file(rootPath, file.filePath)
+    facesApi.file(roots, file.filePath)
       .then(r => { if (!cancelled) setFaces(r.data.faces) })
       .catch(() => { if (!cancelled) setFaces([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [rootPath, file.filePath, peopleKey])
+  }, [roots, file.filePath, peopleKey])
 
   const update = (faceId: number, patch: Partial<FileFace>) =>
     setFaces(prev => prev?.map(f => (f.faceId === faceId ? { ...f, ...patch } : f)) ?? prev)

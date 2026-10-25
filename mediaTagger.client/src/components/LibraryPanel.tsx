@@ -20,7 +20,7 @@ const tileGrid = {
 } as const
 
 interface Props {
-  rootPath: string
+  roots: string[]
   /** Bumped whenever tags change anywhere, so the counts here can catch up. */
   refreshKey: number
   /** Only the visible tab refetches; a hidden one waits until it is opened. */
@@ -28,7 +28,7 @@ interface Props {
   onFilter: (req: SearchRequest) => void
 }
 
-export function LibraryPanel({ rootPath, refreshKey, active, onFilter }: Props) {
+export function LibraryPanel({ roots, refreshKey, active, onFilter }: Props) {
   const [stats, setStats] = useState<LibraryStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState(0)
@@ -36,22 +36,22 @@ export function LibraryPanel({ rootPath, refreshKey, active, onFilter }: Props) 
   const loadedFor = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!rootPath || !active) return
+    if (!roots.length || !active) return
 
     // Tagging twenty photos and then opening this tab costs one refresh, not twenty.
-    const signature = `${rootPath}|${refreshKey}`
+    const signature = `${roots.join('\n')}|${refreshKey}`
     if (loadedFor.current === signature) return
     loadedFor.current = signature
 
     setLoading(true)
-    mediaApi.getLibraryStats(rootPath)
+    mediaApi.getLibraryStats(roots)
       .then(r => setStats(r.data))
       // Let a failed load be retried rather than remembered as done.
       .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
-  }, [rootPath, refreshKey, active])
+  }, [roots, refreshKey, active])
 
-  if (!rootPath) return (
+  if (!roots.length) return (
     <Box sx={{ p: 3, textAlign: 'center' }}>
       <Typography color="text.secondary">Оберіть папку</Typography>
     </Box>
@@ -68,10 +68,11 @@ export function LibraryPanel({ rootPath, refreshKey, active, onFilter }: Props) 
 
   const handleItemClick = (name: string) => {
     const key = current.filterKey
-    if (key === 'albums') onFilter({ albums: [name], rootPath })
-    else if (key === 'people') onFilter({ people: [name], rootPath })
-    else if (key === 'place') onFilter({ place: name, rootPath })
-    else if (key === 'groups') onFilter({ groups: [name], rootPath })
+    const search = { rootPath: roots[0], rootPaths: roots }
+    if (key === 'albums') onFilter({ albums: [name], ...search })
+    else if (key === 'people') onFilter({ people: [name], ...search })
+    else if (key === 'place') onFilter({ place: name, ...search })
+    else if (key === 'groups') onFilter({ groups: [name], ...search })
   }
 
   return (
