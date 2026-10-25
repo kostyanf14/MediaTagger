@@ -26,25 +26,32 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 
-// Allow large video files to be streamed
+// Localhost stays open. Any other listen address is the NAS case: HTTPS plus one key.
+var gate = NetworkAccess.Prepare(
+    builder.Environment.ContentRootPath,
+    builder.Configuration["MediaTagger:ListenUrl"],
+    builder.Configuration["MediaTagger:CacheRoot"],
+    builder.Configuration["MediaTagger:AccessKey"]);
+
 builder.WebHost.ConfigureKestrel(opts =>
 {
     opts.Limits.MaxRequestBodySize = null;
+    if (gate.Certificate != null)
+        opts.ConfigureHttpsDefaults(https => https.ServerCertificate = gate.Certificate);
 });
-
-// Bind address. appsettings and MediaTagger__ListenUrl override this; localhost
-// only accepts clients on the same machine, so a NAS uses http://0.0.0.0:5001.
-var listenUrl = builder.Configuration["MediaTagger:ListenUrl"];
-if (string.IsNullOrWhiteSpace(listenUrl))
-    listenUrl = "http://localhost:5001";
-builder.WebHost.UseUrls(listenUrl);
+builder.WebHost.UseUrls(gate.ListenUrl);
 
 var app = builder.Build();
 
-app.UseSwagger();
-app.UseSwaggerUI();
+// Swagger is a map of every route. Keep it for the local app; the NAS does not serve it.
+if (gate.Key is null)
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 app.UseCors("ElectronPolicy");
+NetworkAccess.UseKeyCheck(app, gate.Key);
 app.UseStaticFiles();
-app.MapGet("/health", () => Results.Ok("ok"));
+app.MapGet("/health", () => Results.Ok(new { ok = true, auth = gate.Key != null }));
 app.MapControllers();
 app.Run();

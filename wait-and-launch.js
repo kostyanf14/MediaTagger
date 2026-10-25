@@ -14,8 +14,10 @@ const TIMEOUT = 120000
 
 function checkUrl(url) {
   const lib = url.startsWith('https:') ? require('https') : http
+  // The launcher only checks that the port answers. Electron pins the certificate.
+  const options = url.startsWith('https:') ? { rejectUnauthorized: false } : {}
   return new Promise((resolve) => {
-    lib.get(url, (res) => {
+    lib.get(url, options, (res) => {
       res.resume()
       resolve(res.statusCode < 500)
     }).on('error', () => resolve(false))

@@ -25,7 +25,8 @@ import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import {
   mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress,
-  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
+  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest,
+  checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
 import { useElectron } from './hooks/useElectron'
@@ -110,6 +111,11 @@ export default function App() {
   // map pins — know their data is stale and can refetch when next shown.
   const [tagsVersion, setTagsVersion] = useState(0)
   const markTagsChanged = useCallback(() => setTagsVersion(v => v + 1), [])
+  // Localhost is open. A NAS answers /health with auth:true and the window asks once.
+  const [access, setAccess] = useState<'checking' | 'offline' | 'need-key' | 'ready'>(apiIsLocal ? 'ready' : 'checking')
+  const [keyDraft, setKeyDraft] = useState('')
+  const [keyError, setKeyError] = useState('')
+  const [connectAttempt, setConnectAttempt] = useState(0)
 
   // Only poll while a load is in flight. The first scan of a large library reads
   // metadata from every file and takes seconds; cached ones finish before the first
@@ -143,7 +149,32 @@ export default function App() {
     [sorted, groups, groupBy]
   )
 
+  useEffect(() => onAccessDenied(() => {
+    setKeyError('Ключ не підходить')
+    setAccess('need-key')
+  }), [])
+
   useEffect(() => {
+    if (apiIsLocal) return
+    let cancelled = false
+    setAccess('checking')
+    checkServer().then(async state => {
+      if (cancelled) return
+      if (state === 'down') { setAccess('offline'); return }
+      if (state === 'open') { setAccess('ready'); return }
+      const saved = readAccessKey()
+      if (!saved) { setAccess('need-key'); return }
+      const result = await unlockServer(saved)
+      if (cancelled) return
+      if (result === 'ok') setAccess('ready')
+      else if (result === 'down') setAccess('offline')
+      else { setKeyError('Ключ не підходить'); setAccess('need-key') }
+    })
+    return () => { cancelled = true }
+  }, [connectAttempt])
+
+  useEffect(() => {
+    if (access !== 'ready') return
     settingsApi.get().then(async res => {
       const s = res.data
       setSettings(s)
@@ -158,7 +189,14 @@ export default function App() {
         if (reachable) { openFolder(candidate, s); return }
       }
     }).catch(() => {})
-  }, [])
+  }, [access])
+
+  const submitKey = async () => {
+    const result = await unlockServer(keyDraft)
+    if (result === 'ok') setAccess('ready')
+    else if (result === 'rejected') setKeyError('Ключ не підходить')
+    else setAccess('offline')
+  }
 
   const saveSettings = useCallback((updated: AppSettings) => {
     setSettings(updated)
@@ -311,6 +349,48 @@ export default function App() {
   }
 
   const isDefault = !!rootPath && folderKey(settings.defaultFolder) === folderKey(rootPath)
+
+  if (access !== 'ready') {
+    return (
+      <ThemeProvider theme={darkTheme}>
+        <CssBaseline />
+        <Box sx={{
+          height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          bgcolor: 'background.default', p: 2
+        }}>
+          <Box sx={{
+            width: 380, p: 3, bgcolor: 'background.paper', borderRadius: 2,
+            display: 'flex', flexDirection: 'column', gap: 1.5
+          }}>
+            <Typography variant="h6">Підключення до сервера</Typography>
+            {access === 'checking' && (
+              <Typography color="text.secondary">Перевірка сервера…</Typography>
+            )}
+            {access === 'offline' && (
+              <>
+                <Typography color="text.secondary">
+                  Немає зв'язку з сервером. Перевірте, що API запущений і адреса починається з https://.
+                </Typography>
+                <Button variant="contained" onClick={() => setConnectAttempt(n => n + 1)}>Спробувати знову</Button>
+              </>
+            )}
+            {access === 'need-key' && (
+              <>
+                <Typography color="text.secondary">
+                  Сервер у мережі закритий ключем. Він написаний у консолі API на NAS і у файлі access-key.txt.
+                </Typography>
+                <TextField size="small" type="password" label="Ключ доступу" value={keyDraft} autoFocus
+                  error={!!keyError} helperText={keyError}
+                  onChange={e => { setKeyDraft(e.target.value); setKeyError('') }}
+                  onKeyDown={e => { if (e.key === 'Enter' && keyDraft.trim()) submitKey() }} />
+                <Button variant="contained" onClick={submitKey} disabled={!keyDraft.trim()}>Підключити</Button>
+              </>
+            )}
+          </Box>
+        </Box>
+      </ThemeProvider>
+    )
+  }
 
   return (
     <ThemeProvider theme={darkTheme}>

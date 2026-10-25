@@ -23,6 +23,77 @@ export const apiIsLocal = apiHostIsLocal(API_ORIGIN)
 
 const api = axios.create({ baseURL: `${API_ORIGIN}/api` })
 
+const accessKeyName = `mediatagger.accessKey:${API_ORIGIN}`
+
+function readStoredKey(): string {
+  try { return localStorage.getItem(accessKeyName)?.trim() ?? '' } catch { return '' }
+}
+
+function writeStoredKey(key: string) {
+  try {
+    const trimmed = key.trim()
+    if (trimmed) localStorage.setItem(accessKeyName, trimmed)
+    else localStorage.removeItem(accessKeyName)
+  } catch { /* private mode: the key lasts for this page only if we kept it, and we don't */ }
+}
+
+export function readAccessKey(): string {
+  return readStoredKey()
+}
+
+// img and video URLs cannot carry a header. The key is added when the URL is built,
+// which is at render time, so a key entered later is picked up on the next paint.
+function withAccessKey(url: string): string {
+  const key = readStoredKey()
+  if (!key) return url
+  const join = url.includes('?') ? '&' : '?'
+  return `${url}${join}access_key=${encodeURIComponent(key)}`
+}
+
+const accessDenied = new Set<() => void>()
+
+/** Fired when a network API rejects the saved key. Localhost never does this. */
+export function onAccessDenied(listener: () => void): () => void {
+  accessDenied.add(listener)
+  return () => accessDenied.delete(listener)
+}
+
+api.interceptors.request.use(config => {
+  const key = readStoredKey()
+  if (key) config.headers['X-MediaTagger-Key'] = key
+  return config
+})
+
+api.interceptors.response.use(response => response, error => {
+  if (!apiIsLocal && axios.isAxiosError(error) && error.response?.status === 401)
+    accessDenied.forEach(listener => listener())
+  return Promise.reject(error)
+})
+
+export type ServerReach = 'open' | 'locked' | 'down'
+
+/** `/health` is open on purpose, so the window can tell "needs a key" from "nothing is listening". */
+export async function checkServer(): Promise<ServerReach> {
+  try {
+    const res = await axios.get(`${API_ORIGIN}/health`, { timeout: 5000 })
+    return res.data?.auth === true ? 'locked' : 'open'
+  } catch {
+    return 'down'
+  }
+}
+
+export async function unlockServer(key: string): Promise<'ok' | 'rejected' | 'down'> {
+  writeStoredKey(key)
+  try {
+    await api.get('/settings')
+    return 'ok'
+  } catch (error) {
+    writeStoredKey('')
+    if (axios.isAxiosError(error) && error.response?.status === 401) return 'rejected'
+    return 'down'
+  }
+}
+
 export interface Coordinates { lat: number; lng: number }
 export interface FileTags {
   people: string[]; place: string; groups: string[]
@@ -147,12 +218,13 @@ export const mediaApi = {
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which
   // needs the original. The server caches each size separately.
   getThumbnailUrl: (filePath: string, maxSize?: number) =>
-    `${API_ORIGIN}/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
-    (maxSize ? `&maxSize=${maxSize}` : ''),
+    withAccessKey(
+      `${API_ORIGIN}/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
+      (maxSize ? `&maxSize=${maxSize}` : '')),
 
   // Stream — for video playback, supports HTTP Range (seeking)
   getStreamUrl: (filePath: string) =>
-    `${API_ORIGIN}/api/media/stream?filePath=${encodeURIComponent(filePath)}`
+    withAccessKey(`${API_ORIGIN}/api/media/stream?filePath=${encodeURIComponent(filePath)}`)
 }
 
 export const facesApi = {
@@ -172,8 +244,9 @@ export const facesApi = {
     api.post<number>('/faces/reject', items),
   // A square JPEG around one face, cut from the file's thumbnail.
   getCropUrl: (filePath: string, box: { x: number; y: number; w: number; h: number }, size: number) =>
-    `${API_ORIGIN}/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
-    `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}`
+    withAccessKey(
+      `${API_ORIGIN}/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
+      `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}`)
 }
 
 // Accepting a place is a plain bulk tag write — mediaApi.bulkAddTags with `place`.

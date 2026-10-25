@@ -764,6 +764,10 @@ mediaTagger.client/build/
 # Thumbnail cache written by the API next to the solution
 .thumbnails/
 
+# Generated when the API listens on the network (not on localhost)
+access-key.txt
+api-cert.pfx
+
 # graphify knowledge graph
 graphify-out/
 

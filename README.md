@@ -231,13 +231,17 @@ API і медіафайли працюють на NAS, вікно MediaTagger �
 | Параметр | Змінна середовища | За замовчуванням |
 |----------|-------------------|------------------|
 | Адреса, яку слухає API | `MediaTagger__ListenUrl` | `http://localhost:5001` |
+| Ключ доступу для мережі | `MediaTagger__AccessKey` | створюється сам і пишеться в `access-key.txt` |
 | Каталог кешу (мініатюри, бази облич та EXIF) | `MediaTagger__CacheRoot` | поруч із репозиторієм, інакше LocalAppData |
 | Файл налаштувань (останні папки) | `MediaTagger__SettingsPath` | `%AppData%/MediaTagger/settings.json` |
 | Каталог із FFmpeg | `MediaTagger__FfmpegDirectory` | пошук у PATH |
 
+`localhost` лишається відкритим: на одному комп'ютері нічого вводити не треба. Адреса `0.0.0.0` (або IP NAS) вмикає HTTPS і ключ. Сертифікат самопідписаний, вікно Electron довіряє йому з першого підключення і запам'ятовує відбиток.
+
 ```bash
 export MediaTagger__ListenUrl=http://0.0.0.0:5001
-# за потреби:
+# за потреби — свій ключ замість згенерованого:
+# export MediaTagger__AccessKey="свій-ключ"
 # export MediaTagger__CacheRoot=/volume1/@MediaTagger/cache
 # export MediaTagger__SettingsPath=/volume1/@MediaTagger/settings.json
 # export MediaTagger__FfmpegDirectory=/usr/bin
@@ -248,7 +252,7 @@ dotnet run
 
 У PowerShell та сама змінна: `$env:MediaTagger__ListenUrl = "http://0.0.0.0:5001"`.
 
-Перевірка з ПК: відкрийте `http://<ip-nas>:5001/health` — відповідь має бути `ok`.
+У консолі буде рядок `Access key:`. Той самий ключ лежить у `access-key.txt` поруч із кешем. З ПК перевірте `https://<ip-nas>:5001/health` — відповідь `{"ok":true,"auth":true}`. Браузер попередить про сертифікат; саме вікно програми приймає його саме.
 
 ### ПК — вікно застосунку
 
@@ -257,10 +261,12 @@ Node.js і залежності React та Electron ставляться як у
 PowerShell:
 
 ```powershell
-$env:MEDIATAGGER_API_URL = "http://<ip-nas>:5001"
+$env:MEDIATAGGER_API_URL = "https://<ip-nas>:5001"
 npm run dev:react
 npm run dev:electron
 ```
+
+Відкриється вікно з полем ключа. Вставте ключ з консолі NAS — він запам'ятовується на цьому ПК. Якщо сертифікат на NAS замінили, видаліть файл `nas-cert-<ip>` у каталозі даних Electron і запустіть знову.
 
 `MEDIATAGGER_CLIENT_URL` — адреса вікна React, за замовчуванням `http://localhost:3000`.
 
