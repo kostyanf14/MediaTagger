@@ -9,12 +9,15 @@ namespace MediaTagger.API.Services;
 public class CacheLocator
 {
     private readonly string _root;
+    private readonly bool _explicit;
     private readonly ILogger<CacheLocator> _logger;
 
     public CacheLocator(IHostEnvironment env, IConfiguration config, ILogger<CacheLocator> logger)
     {
         _logger = logger;
-        _root = ResolveRoot(env.ContentRootPath, config["MediaTagger:CacheRoot"], logger);
+        var configured = config["MediaTagger:CacheRoot"];
+        _explicit = !string.IsNullOrWhiteSpace(configured);
+        _root = ResolveRoot(env.ContentRootPath, configured, logger);
         _logger.LogInformation("Cache root: {Path}", _root);
     }
 
@@ -49,7 +52,27 @@ public class CacheLocator
 
     /// <summary>Returns the full path for a cache file, its folder already created.</summary>
     public string GetFilePath(string folderName, string fileName)
-        => Path.Combine(GetDirectory(folderName), fileName);
+    {
+        // A chosen directory is the cache. The dot folder only hides the databases
+        // when they would otherwise sit next to the solution.
+        if (_explicit && folderName == ".cache")
+        {
+            var direct = Path.Combine(_root, fileName);
+            var nested = Path.Combine(_root, folderName, fileName);
+            if (!File.Exists(direct) && File.Exists(nested))
+            {
+                foreach (var suffix in new[] { "", "-wal", "-shm" })
+                {
+                    var from = nested + suffix;
+                    if (File.Exists(from)) File.Move(from, direct + suffix);
+                }
+                var dir = Path.GetDirectoryName(nested)!;
+                if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+            }
+            return direct;
+        }
+        return Path.Combine(GetDirectory(folderName), fileName);
+    }
 
     private static bool IsWritable(string directory, out string reason)
     {
