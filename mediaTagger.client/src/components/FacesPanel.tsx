@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import {
-  Box, Typography, Button, IconButton, Tooltip, LinearProgress, Chip, Alert, Divider, Skeleton
+  Box, Typography, Button, IconButton, Tooltip, LinearProgress, Chip, Alert, Skeleton
 } from '@mui/material'
 import CheckIcon from '@mui/icons-material/Check'
 import CloseIcon from '@mui/icons-material/Close'
@@ -16,8 +17,32 @@ import { FaceAvatar } from './FaceAvatar'
 // Often enough that the counter visibly moves, rare enough to stay out of the scan's way.
 const STATUS_POLL_MS = 1500
 const CARD_SIZE = 104
+const CARD_GAP = 8
+const HEADER_HEIGHT = 48
+// Card plus the filename under it, and a little air before the next row.
+const CARD_ROW_HEIGHT = CARD_SIZE + 22
+const OVERSCAN_ROWS = 3
 // "Add to all" only takes matches this close; weaker ones are left to be checked one by one.
 const CONFIDENT_SCORE = 0.55
+
+type SuggestionGroup = { person: string; total: number; items: FaceSuggestion[] }
+type FaceRow =
+  | { kind: 'header'; key: string; group: SuggestionGroup; remaining: number }
+  | { kind: 'cards'; key: string; person: string; items: FaceSuggestion[] }
+
+function buildFaceRows(groups: SuggestionGroup[], columns: number, sent: Map<string, number>): FaceRow[] {
+  const rows: FaceRow[] = []
+  const perRow = Math.max(1, columns)
+  for (const group of groups) {
+    const answered = (sent.get(group.person) ?? group.items.length) - group.items.length
+    rows.push({ kind: 'header', key: `h:${group.person}`, group, remaining: group.total - answered })
+    for (let i = 0; i < group.items.length; i += perRow) {
+      const items = group.items.slice(i, i + perRow)
+      rows.push({ kind: 'cards', key: `c:${items[0].faceId}`, person: group.person, items })
+    }
+  }
+  return rows
+}
 
 interface Props {
   roots: string[]
@@ -55,6 +80,49 @@ function FaceContext({ item }: { item: FaceSuggestion }) {
   )
 }
 
+function FaceCard({ item, person, onAccept, onReject }: {
+  item: FaceSuggestion
+  person: string
+  onAccept: (person: string, items: FaceSuggestion[]) => void
+  onReject: (person: string, items: FaceSuggestion[]) => void
+}) {
+  return (
+    <Box sx={{
+      position: 'relative', width: CARD_SIZE, flexShrink: 0,
+      '&:hover .face-actions': { opacity: 1 }
+    }}>
+      <Tooltip title={<FaceContext item={item} />} placement="top" enterDelay={500}
+        componentsProps={{ tooltip: { sx: { maxWidth: 'none', p: 1 } } }}>
+        <Box>
+          <FaceAvatar filePath={item.filePath} box={item} size={CARD_SIZE} variant="rounded"
+            sx={{ border: '2px solid', borderColor: scoreColor(item.score) }} />
+        </Box>
+      </Tooltip>
+      <Box className="face-actions" sx={{
+        position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.5,
+        opacity: 0, transition: 'opacity 0.15s'
+      }}>
+        <Tooltip title={`Так, це ${person}`}>
+          <IconButton size="small" onClick={() => onAccept(person, [item])}
+            sx={{ bgcolor: 'success.dark', p: 0.25, '&:hover': { bgcolor: 'success.main' } }}>
+            <CheckIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Ні">
+          <IconButton size="small" onClick={() => onReject(person, [item])}
+            sx={{ bgcolor: 'error.dark', p: 0.25, '&:hover': { bgcolor: 'error.main' } }}>
+            <CloseIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <Typography variant="caption" color="text.secondary" noWrap
+        sx={{ display: 'block', fontSize: '0.65rem' }} title={item.fileName}>
+        {item.fileName}
+      </Typography>
+    </Box>
+  )
+}
+
 export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   const [status, setStatus] = useState<FaceScanStatus | null>(null)
   const [data, setData] = useState<FaceSuggestionsResponse | null>(null)
@@ -62,6 +130,8 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   // Faces already answered. A refetch that started before the answer would otherwise
   // bring the card back for a moment.
   const [decided, setDecided] = useState<Set<number>>(new Set())
+  const [applyingAll, setApplyingAll] = useState(false)
+  const applyingAllRef = useRef(false)
   const loadedFor = useRef<string | null>(null)
   const scanWasActive = useRef(false)
 
@@ -133,18 +203,63 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
     facesApi.scan(roots).then(r => { setStatus(r.data); scanWasActive.current = r.data.active }).catch(() => {})
   }
 
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState(0)
+
+  const people = useMemo(() => (data?.people ?? [])
+    .map(p => ({ ...p, items: p.items.filter(i => !decided.has(i.faceId)) }))
+    .filter(p => p.items.length > 0), [data, decided])
+
+  // The percent is what the tooltip shows, so 80.4% (shown as 80) stays for a manual check.
+  const above80 = people.reduce((n, g) => n + g.items.filter(i => Math.round(i.score * 100) > 80).length, 0)
+
+  const columns = Math.max(1, Math.floor((width + CARD_GAP) / (CARD_SIZE + CARD_GAP)))
+  const rows = useMemo(() => {
+    const sent = new Map((data?.people ?? []).map(p => [p.person, p.items.length]))
+    return buildFaceRows(people, columns, sent)
+  }, [people, columns, data])
+
+  const virtualizer = useVirtualizer({
+    count: active ? rows.length : 0,
+    getScrollElement: () => scroller,
+    estimateSize: index => rows[index]?.kind === 'header' ? HEADER_HEIGHT : CARD_ROW_HEIGHT,
+    overscan: OVERSCAN_ROWS
+  })
+
+  useLayoutEffect(() => {
+    if (!scroller) return
+    const measure = () => { if (scroller.clientWidth > 0) setWidth(scroller.clientWidth) }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [scroller])
+
+  useLayoutEffect(() => { virtualizer.measure() }, [virtualizer, rows, columns])
+
+  const acceptAbove80 = async () => {
+    if (applyingAllRef.current) return
+    applyingAllRef.current = true
+    setApplyingAll(true)
+    try {
+      for (const group of people) {
+        const high = group.items.filter(i => Math.round(i.score * 100) > 80)
+        if (high.length) await accept(group.person, high)
+      }
+    } finally {
+      applyingAllRef.current = false
+      setApplyingAll(false)
+    }
+  }
+
   if (!roots.length) return (
     <Box sx={{ p: 3, textAlign: 'center' }}>
       <Typography color="text.secondary">Оберіть папку</Typography>
     </Box>
   )
 
-  const people = (data?.people ?? [])
-    .map(p => ({ ...p, items: p.items.filter(i => !decided.has(i.faceId)) }))
-    .filter(p => p.items.length > 0)
-
   return (
-    <Box sx={{ height: '100%', overflowY: 'auto' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* Scan state */}
       <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
         {status && !status.available ? (
@@ -209,9 +324,18 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
         </Box>
       )}
 
-      {/* Suggestions */}
-      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-        {loading && !data ? (
+      {above80 > 0 && (
+        <Box sx={{ px: 2, pt: 1.5, flexShrink: 0 }}>
+          <Button size="small" variant="contained" startIcon={<DoneAllIcon />}
+            disabled={applyingAll} onClick={acceptAbove80}>
+            Застосувати всі понад 80% ({above80})
+          </Button>
+        </Box>
+      )}
+
+      {/* Only the rows on screen are mounted — the same idea as the photo gallery. */}
+      <Box ref={setScroller} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2, pt: 1 }}>
+        {!active ? null : loading && !data ? (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {Array.from({ length: 12 }).map((_, i) => (
               <Skeleton key={i} variant="rounded" width={CARD_SIZE} height={CARD_SIZE} />
@@ -226,77 +350,55 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
           <Typography color="text.secondary" variant="body2" sx={{ textAlign: 'center', mt: 4 }}>
             Нових підказок немає
           </Typography>
-        ) : people.map(group => {
-          const cover = data?.learned.find(l => l.name.toLowerCase() === group.person.toLowerCase())?.cover
-          // The server sends the best few; the total also counts the ones not shown yet.
-          const answered = (data?.people.find(p => p.person === group.person)?.items.length ?? 0) - group.items.length
-          const remaining = group.total - answered
-          const confident = group.items.filter(i => i.score >= CONFIDENT_SCORE)
-          return (
-            <Box key={group.person}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                {cover && <FaceAvatar filePath={cover.filePath} box={cover} size={32} />}
-                <Typography variant="subtitle2" fontWeight={600}>{group.person}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  можливо ще на {remaining} фото
-                </Typography>
-                <Box sx={{ flex: 1 }} />
-                <Button size="small" color="inherit" onClick={() => reject(group.person, group.items)}
-                  sx={{ color: 'text.secondary' }}>
-                  Відхилити всі
-                </Button>
-                <Tooltip title="Лише збіги з високою схожістю (зелена рамка); решту перевірте поштучно">
-                  <span>
-                    <Button size="small" variant="outlined" startIcon={<DoneAllIcon />}
-                      disabled={confident.length === 0}
-                      onClick={() => accept(group.person, confident)}>
-                      Додати на впевнені ({confident.length})
-                    </Button>
-                  </span>
-                </Tooltip>
-              </Box>
-
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {group.items.map(item => (
-                  <Box key={item.faceId} sx={{
-                    position: 'relative', width: CARD_SIZE,
-                    '&:hover .face-actions': { opacity: 1 }
-                  }}>
-                    <Tooltip title={<FaceContext item={item} />} placement="top" enterDelay={500}
-                      componentsProps={{ tooltip: { sx: { maxWidth: 'none', p: 1 } } }}>
-                      <Box>
-                        <FaceAvatar filePath={item.filePath} box={item} size={CARD_SIZE} variant="rounded"
-                          sx={{ border: '2px solid', borderColor: scoreColor(item.score) }} />
+        ) : (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+            {virtualizer.getVirtualItems().map(virtualRow => {
+              const row = rows[virtualRow.index]
+              if (!row) return null
+              return (
+                <div key={row.key} style={{
+                  position: 'absolute', top: 0, left: 0, width: '100%',
+                  height: virtualRow.size, transform: `translateY(${virtualRow.start}px)`
+                }}>
+                  {row.kind === 'header' ? (() => {
+                    const cover = data?.learned.find(l => l.name.toLowerCase() === row.group.person.toLowerCase())?.cover
+                    const confident = row.group.items.filter(i => i.score >= CONFIDENT_SCORE)
+                    return (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: HEADER_HEIGHT }}>
+                        {cover && <FaceAvatar filePath={cover.filePath} box={cover} size={32} />}
+                        <Typography variant="subtitle2" fontWeight={600}>{row.group.person}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          можливо ще на {row.remaining} фото
+                        </Typography>
+                        <Box sx={{ flex: 1 }} />
+                        <Button size="small" color="inherit" onClick={() => reject(row.group.person, row.group.items)}
+                          sx={{ color: 'text.secondary' }}>
+                          Відхилити всі
+                        </Button>
+                        <Tooltip title="Лише збіги з високою схожістю (зелена рамка); решту перевірте поштучно">
+                          <span>
+                            <Button size="small" variant="outlined" startIcon={<DoneAllIcon />}
+                              disabled={confident.length === 0}
+                              onClick={() => accept(row.group.person, confident)}>
+                              Додати на впевнені ({confident.length})
+                            </Button>
+                          </span>
+                        </Tooltip>
                       </Box>
-                    </Tooltip>
-                    <Box className="face-actions" sx={{
-                      position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.5,
-                      opacity: 0, transition: 'opacity 0.15s'
-                    }}>
-                      <Tooltip title={`Так, це ${group.person}`}>
-                        <IconButton size="small" onClick={() => accept(group.person, [item])}
-                          sx={{ bgcolor: 'success.dark', p: 0.25, '&:hover': { bgcolor: 'success.main' } }}>
-                          <CheckIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Ні">
-                        <IconButton size="small" onClick={() => reject(group.person, [item])}
-                          sx={{ bgcolor: 'error.dark', p: 0.25, '&:hover': { bgcolor: 'error.main' } }}>
-                          <CloseIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
+                    )
+                  })() : (
+                    <Box sx={{ display: 'flex', gap: `${CARD_GAP}px` }}>
+                      {row.items.map(item => (
+                        <FaceCard key={item.faceId} item={item} person={row.person}
+                          onAccept={accept} onReject={reject} />
+                      ))}
                     </Box>
-                    <Typography variant="caption" color="text.secondary" noWrap
-                      sx={{ display: 'block', fontSize: '0.65rem' }} title={item.fileName}>
-                      {item.fileName}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-              <Divider sx={{ mt: 2 }} />
-            </Box>
-          )
-        })}
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </Box>
     </Box>
   )
