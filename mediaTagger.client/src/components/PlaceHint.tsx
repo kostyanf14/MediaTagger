@@ -7,7 +7,7 @@ import { placesApi, Coordinates, PlaceCandidate } from '../api/client'
 const DEBOUNCE_MS = 300
 
 interface Props {
-  rootPath: string
+  roots: string[]
   /** Where the photo was taken, as currently shown in the editor. */
   coordinates: Coordinates | null
   /** Only an empty place gets hints; a written one is the user's word. */
@@ -16,22 +16,22 @@ interface Props {
 }
 
 /** Places already written on photos taken around the same spot, one click to use. */
-export function PlaceHint({ rootPath, coordinates, place, onPick }: Props) {
+export function PlaceHint({ roots, coordinates, place, onPick }: Props) {
   const [candidates, setCandidates] = useState<PlaceCandidate[]>([])
   const lat = coordinates?.lat
   const lng = coordinates?.lng
-  const wanted = !!rootPath && lat != null && lng != null && !place.trim()
+  const wanted = roots.length > 0 && lat != null && lng != null && !place.trim()
 
   useEffect(() => {
     if (!wanted) { setCandidates([]); return }
     let cancelled = false
     const timer = setTimeout(() => {
-      placesApi.nearby(rootPath, lat!, lng!)
+      placesApi.nearby(roots, lat!, lng!)
         .then(r => { if (!cancelled) setCandidates(r.data) })
         .catch(() => { if (!cancelled) setCandidates([]) })
     }, DEBOUNCE_MS)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [wanted, rootPath, lat, lng])
+  }, [wanted, roots, lat, lng])
 
   if (!wanted || candidates.length === 0) return null
 

@@ -20,7 +20,7 @@ const CARD_SIZE = 104
 const CONFIDENT_SCORE = 0.55
 
 interface Props {
-  rootPath: string
+  roots: string[]
   /** Bumped whenever tags change anywhere — a new tag is new training data. */
   refreshKey: number
   /** Only the visible tab polls and refetches. */
@@ -55,7 +55,7 @@ function FaceContext({ item }: { item: FaceSuggestion }) {
   )
 }
 
-export function FacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props) {
+export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   const [status, setStatus] = useState<FaceScanStatus | null>(null)
   const [data, setData] = useState<FaceSuggestionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -66,26 +66,26 @@ export function FacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props)
   const scanWasActive = useRef(false)
 
   const load = useCallback((quiet = false) => {
-    if (!rootPath) return
+    if (!roots.length) return
     if (!quiet) setLoading(true)
-    facesApi.suggestions(rootPath)
+    facesApi.suggestions(roots)
       .then(r => setData(r.data))
       .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
-  }, [rootPath])
+  }, [roots])
 
   useEffect(() => {
-    if (!rootPath || !active) return
-    const signature = `${rootPath}|${refreshKey}`
+    if (!roots.length || !active) return
+    const signature = `${roots.join('\n')}|${refreshKey}`
     if (loadedFor.current === signature) return
     // A refetch after an accept keeps the cards on screen instead of flashing skeletons.
-    const quiet = loadedFor.current?.startsWith(`${rootPath}|`) ?? false
+    const quiet = loadedFor.current?.startsWith(`${roots.join('\n')}|`) ?? false
     loadedFor.current = signature
     load(quiet)
-  }, [rootPath, refreshKey, active, load])
+  }, [roots, refreshKey, active, load])
 
   // Different library, different faces.
-  useEffect(() => { setData(null); setDecided(new Set()) }, [rootPath])
+  useEffect(() => { setData(null); setDecided(new Set()) }, [roots])
 
   useEffect(() => {
     if (!active) return
@@ -130,10 +130,10 @@ export function FacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props)
   }
 
   const startScan = () => {
-    facesApi.scan(rootPath).then(r => { setStatus(r.data); scanWasActive.current = r.data.active }).catch(() => {})
+    facesApi.scan(roots).then(r => { setStatus(r.data); scanWasActive.current = r.data.active }).catch(() => {})
   }
 
-  if (!rootPath) return (
+  if (!roots.length) return (
     <Box sx={{ p: 3, textAlign: 'center' }}>
       <Typography color="text.secondary">Оберіть папку</Typography>
     </Box>

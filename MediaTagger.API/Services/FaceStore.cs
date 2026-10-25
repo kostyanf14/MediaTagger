@@ -196,6 +196,76 @@ public class FaceStore : IDisposable
         Interlocked.Increment(ref _version);
     }
 
+    /// <summary>Every confirmed face and rejection under one of <paramref name="from"/> takes the name <paramref name="to"/>.</summary>
+    public int RenamePeople(IEnumerable<string> from, string to)
+    {
+        var sources = new HashSet<string>(
+            from.Select(s => s.Trim()).Where(s => s.Length > 0), StringComparer.OrdinalIgnoreCase);
+        var target = to.Trim();
+        if (sources.Count == 0 || target.Length == 0) return 0;
+        var targetKey = target.ToLowerInvariant();
+
+        lock (_gate)
+        {
+            var labelIds = _labels
+                .Where(kv => sources.Contains(kv.Value) && !kv.Value.Equals(target, StringComparison.Ordinal))
+                .Select(kv => kv.Key)
+                .ToHashSet();
+            var rejectionMoves = _rejections.Keys
+                .Where(k => sources.Contains(k.Person) && k.Person != targetKey)
+                .ToList();
+            if (labelIds.Count == 0 && rejectionMoves.Count == 0) return 0;
+
+            var labelledAsTarget = new HashSet<long>(labelIds);
+            foreach (var (id, person) in _labels)
+                if (person.Equals(target, StringComparison.OrdinalIgnoreCase)) labelledAsTarget.Add(id);
+
+            using var tx = _connection.BeginTransaction();
+            using (var update = Command("UPDATE labels SET person = $p WHERE face_id = $id", tx))
+            using (var drop = Command("DELETE FROM rejections WHERE face_id = $id AND person = $p", tx))
+            using (var insert = Command("INSERT OR IGNORE INTO rejections (face_id, person) VALUES ($id, $p)", tx))
+            {
+                var updateId = update.Parameters.Add("$id", SqliteType.Integer);
+                update.Parameters.AddWithValue("$p", target);
+                var dropId = drop.Parameters.Add("$id", SqliteType.Integer);
+                var dropPerson = drop.Parameters.Add("$p", SqliteType.Text);
+                var insertId = insert.Parameters.Add("$id", SqliteType.Integer);
+                insert.Parameters.AddWithValue("$p", targetKey);
+
+                foreach (var id in labelIds)
+                {
+                    updateId.Value = id;
+                    update.ExecuteNonQuery();
+                    dropId.Value = id;
+                    dropPerson.Value = targetKey;
+                    drop.ExecuteNonQuery();
+                }
+                foreach (var (faceId, person) in rejectionMoves)
+                {
+                    dropId.Value = faceId;
+                    dropPerson.Value = person;
+                    drop.ExecuteNonQuery();
+                    if (labelledAsTarget.Contains(faceId)) continue;
+                    insertId.Value = faceId;
+                    insert.ExecuteNonQuery();
+                }
+            }
+            tx.Commit();
+
+            foreach (var id in labelIds)
+            {
+                _labels[id] = target;
+                _rejections.TryRemove((id, targetKey), out _);
+            }
+            foreach (var key in rejectionMoves) _rejections.TryRemove(key, out _);
+            foreach (var (faceId, _) in rejectionMoves)
+                if (!labelledAsTarget.Contains(faceId)) _rejections[(faceId, targetKey)] = 0;
+        }
+
+        Interlocked.Increment(ref _version);
+        return 1;
+    }
+
     /// <summary>Records that this face is not <paramref name="person"/>.</summary>
     public void Reject(long faceId, string person)
     {

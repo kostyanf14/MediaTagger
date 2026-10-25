@@ -32,7 +32,7 @@ interface Props {
   onAutoSaved?: (filePath: string, tags: FileTags) => void
   allTags: { people: string[]; groups: string[]; albums: string[]; places: string[] }
   /** The open library; face suggestions are learned from the tags across all of it. */
-  rootPath: string
+  roots: string[]
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -57,7 +57,7 @@ function parseCoordinates(text: string): Coordinates | null {
   return { lat, lng }
 }
 
-export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, rootPath }: Props) {
+export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, roots }: Props) {
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
   const { revealInExplorer, openFile } = useElectron()
@@ -420,7 +420,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
             />
 
             <PhotoFaces
-              rootPath={rootPath}
+              roots={roots}
               file={file}
               people={tags.people}
               allPeople={allTags.people}
@@ -445,7 +445,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
             />
 
             <PlaceHint
-              rootPath={rootPath}
+              roots={roots}
               coordinates={parseCoordinates(coordStr) ?? file.exif?.gpsCoordinates ?? null}
               place={tags.place}
               onPick={place => applyTagChange({ place })}

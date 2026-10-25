@@ -21,5 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Check if running inside Electron
-  isElectron: true
+  isElectron: true,
+
+  // Empty when unset, so the page can fall back to its own default.
+  apiOrigin: process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || ''
 })

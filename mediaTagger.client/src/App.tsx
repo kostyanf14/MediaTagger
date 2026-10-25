@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Box, CssBaseline, ThemeProvider, createTheme, LinearProgress,
-  Typography, Tabs, Tab, Divider, Button,
+  Typography, Tabs, Tab, Divider, Button, TextField,
   Menu, MenuItem, Tooltip, IconButton, Chip
 } from '@mui/material'
 import FolderIcon from '@mui/icons-material/Folder'
@@ -24,8 +24,9 @@ import { LightboxViewer } from './components/LightboxViewer'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import {
-  mediaApi, settingsApi, facesApi, AppSettings, ScanProgress,
-  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest
+  mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress,
+  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest,
+  checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
 import { useElectron } from './hooks/useElectron'
@@ -86,8 +87,9 @@ function withSuggestions(list: string[], extra: string[], ignoreCase = false): s
 
 export default function App() {
   const { selectFolder } = useElectron()
-  const [settings, setSettings] = useState<AppSettings>({ defaultFolder: '', recentFolders: [] })
+  const [settings, setSettings] = useState<AppSettings>({ defaultFolder: '', recentFolders: [], libraryFolders: [] })
   const [rootPath, setRootPath] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
   const [folderTree, setFolderTree] = useState<FolderNode | null>(null)
   const [currentFolder, setCurrentFolder] = useState('')
   const [files, setFiles] = useState<MediaFile[]>([])
@@ -109,6 +111,11 @@ export default function App() {
   // map pins — know their data is stale and can refetch when next shown.
   const [tagsVersion, setTagsVersion] = useState(0)
   const markTagsChanged = useCallback(() => setTagsVersion(v => v + 1), [])
+  // Localhost is open. A NAS answers /health with auth:true and the window asks once.
+  const [access, setAccess] = useState<'checking' | 'offline' | 'need-key' | 'ready'>(apiIsLocal ? 'ready' : 'checking')
+  const [keyDraft, setKeyDraft] = useState('')
+  const [keyError, setKeyError] = useState('')
+  const [connectAttempt, setConnectAttempt] = useState(0)
 
   // Only poll while a load is in flight. The first scan of a large library reads
   // metadata from every file and takes seconds; cached ones finish before the first
@@ -141,15 +148,61 @@ export default function App() {
     () => (groupBy === 'none' ? sorted : groups.flatMap(g => g.files)),
     [sorted, groups, groupBy]
   )
+  const libraryRoots = useMemo(
+    () => (settings.libraryFolders?.length ? settings.libraryFolders : (rootPath ? [rootPath] : [])),
+    [settings.libraryFolders, rootPath]
+  )
+  // A subfolder is one place. Standing on a library root shows every library folder.
+  const mapRoots = useMemo(() => {
+    if (!libraryRoots.length) return []
+    if (!currentFolder || libraryRoots.some(folder => folderKey(folder) === folderKey(currentFolder)))
+      return libraryRoots
+    return [currentFolder]
+  }, [libraryRoots, currentFolder])
+
+  useEffect(() => onAccessDenied(() => {
+    setKeyError('Ключ не підходить')
+    setAccess('need-key')
+  }), [])
 
   useEffect(() => {
+    if (apiIsLocal) return
+    let cancelled = false
+    setAccess('checking')
+    checkServer().then(async state => {
+      if (cancelled) return
+      if (state === 'down') { setAccess('offline'); return }
+      if (state === 'open') { setAccess('ready'); return }
+      const saved = readAccessKey()
+      if (!saved) { setAccess('need-key'); return }
+      const result = await unlockServer(saved)
+      if (cancelled) return
+      if (result === 'ok') setAccess('ready')
+      else if (result === 'down') setAccess('offline')
+      else { setKeyError('Ключ не підходить'); setAccess('need-key') }
+    })
+    return () => { cancelled = true }
+  }, [connectAttempt])
+
+  useEffect(() => {
+    if (access !== 'ready') return
     settingsApi.get().then(async res => {
-      const s = res.data
+      let s = res.data
+      const saved = (s.libraryFolders ?? []).filter(Boolean)
+      const folders = saved.length ? saved : [s.defaultFolder].filter(Boolean)
+      if (!saved.length && folders.length) {
+        s = { ...s, libraryFolders: folders }
+        settingsApi.save(s).catch(() => {})
+      }
       setSettings(s)
-      // Prefer the pinned folder, then the most recently opened one. Each is checked
-      // first: a library on an external drive may simply not be plugged in today.
-      const candidates = [s.defaultFolder, ...s.recentFolders].filter(Boolean)
+      // Prefer the pinned folder, then the others. Each is checked first: a library
+      // on an external drive may simply not be plugged in today.
+      const candidates = [s.defaultFolder, ...folders].filter(Boolean)
+      const seen = new Set<string>()
       for (const candidate of candidates) {
+        const key = folderKey(candidate)
+        if (seen.has(key)) continue
+        seen.add(key)
         const reachable = await mediaApi.folderExists(candidate)
           .then(r => r.data)
           // If the probe itself fails, trying the folder beats opening nothing.
@@ -157,7 +210,14 @@ export default function App() {
         if (reachable) { openFolder(candidate, s); return }
       }
     }).catch(() => {})
-  }, [])
+  }, [access])
+
+  const submitKey = async () => {
+    const result = await unlockServer(keyDraft)
+    if (result === 'ok') setAccess('ready')
+    else if (result === 'rejected') setKeyError('Ключ не підходить')
+    else setAccess('offline')
+  }
 
   const saveSettings = useCallback((updated: AppSettings) => {
     setSettings(updated)
@@ -201,23 +261,61 @@ export default function App() {
     }
   }, [recursive])
 
-  const loadAllTags = useCallback(async (path: string) => {
-    const res = await mediaApi.getAllTags(path)
+  const loadAllTags = useCallback(async (roots: string[]) => {
+    if (!roots.length) { setAllTags({ people: [], groups: [], albums: [], places: [] }); return }
+    const res = await mediaApi.getAllTags(roots)
     setAllTags(res.data)
   }, [])
 
   const openFolder = useCallback(async (path: string, currentSettings?: AppSettings) => {
-    setRootPath(path)
-    setCurrentFolder(path)
-    loadFolderTree(path)
-    loadFiles(path)
-    loadAllTags(path)
-    // Finding faces runs in the background and skips files already done, so starting
-    // it on every open is how new photos get picked up.
-    facesApi.scan(path).catch(() => {})
+    const folder = normalizeFolder(path)
+    if (!folder) return
+    setRootPath(folder)
+    setCurrentFolder(folder)
+    loadFolderTree(folder)
+    loadFiles(folder)
     const base = currentSettings ?? settings
-    saveSettings(addToRecent(path, base))
-  }, [settings, addToRecent, saveSettings, loadFolderTree, loadFiles, loadAllTags])
+    // The folder on screen is already a root, even when it was never written into
+    // libraryFolders. Forgetting it here is what made a new path replace the old one,
+    // and then face suggestions were learned from the new folder alone.
+    const libraryFolders: string[] = []
+    const carry = currentSettings ? [] : [rootPath]
+    for (const item of [...(base.libraryFolders ?? []), ...carry, folder]) {
+      const normalized = normalizeFolder(item)
+      if (!normalized || libraryFolders.some(existing => folderKey(existing) === folderKey(normalized))) continue
+      libraryFolders.push(normalized)
+    }
+    const next = { ...base, libraryFolders }
+    loadAllTags(libraryFolders)
+    facesApi.scan(libraryFolders).catch(() => {})
+    saveSettings(addToRecent(folder, next))
+  }, [settings, rootPath, addToRecent, saveSettings, loadFolderTree, loadFiles, loadAllTags])
+
+  const addRoot = (path: string) => openFolder(path)
+
+  const removeRoot = (folder: string) => {
+    const source = settings.libraryFolders?.length ? settings.libraryFolders : libraryRoots
+    const libraryFolders = source.filter(item => folderKey(item) !== folderKey(folder))
+    const updated = {
+      ...settings,
+      libraryFolders,
+      defaultFolder: folderKey(settings.defaultFolder) === folderKey(folder) ? (libraryFolders[0] ?? '') : settings.defaultFolder
+    }
+    saveSettings(updated)
+    if (folderKey(rootPath) !== folderKey(folder)) {
+      facesApi.scan(libraryFolders).catch(() => {})
+      loadAllTags(libraryFolders)
+      return
+    }
+    if (libraryFolders[0]) openFolder(libraryFolders[0], updated)
+    else {
+      setRootPath('')
+      setCurrentFolder('')
+      setFolderTree(null)
+      setFiles([])
+      setAllTags({ people: [], groups: [], albums: [], places: [] })
+    }
+  }
 
   const handleRecursiveChange = (withSubfolders: boolean) => {
     setRecursive(withSubfolders)
@@ -226,7 +324,7 @@ export default function App() {
 
   const handleSelectRoot = async () => {
     const path = await selectFolder()
-    if (path) openFolder(path)
+    if (path) addRoot(path)
   }
 
   const handleDelete = async (file: MediaFile) => {
@@ -235,7 +333,7 @@ export default function App() {
     if (lightboxFile?.filePath === file.filePath) setLightboxFile(null)
     // Drop it from the list directly — re-reading the folder would blank the grid.
     setFiles(prev => prev.filter(f => f.filePath !== file.filePath))
-    loadAllTags(rootPath)
+    loadAllTags(libraryRoots)
     markTagsChanged()
   }
 
@@ -309,7 +407,73 @@ export default function App() {
     handleSearch(req)
   }
 
+  // A renamed person is the same change on every photo that had one of the old names.
+  const handlePeopleRenamed = useCallback((from: string[], to: string) => {
+    const sources = new Set(from.map(n => n.toLowerCase()))
+    const target = to.trim()
+    setFiles(prev => prev.map(f => {
+      if (!f.tags.people.some(p => sources.has(p.toLowerCase()))) return f
+      const people: string[] = []
+      let placed = false
+      for (const person of f.tags.people) {
+        if (sources.has(person.toLowerCase()) || person.toLowerCase() === target.toLowerCase()) {
+          if (placed) continue
+          people.push(target)
+          placed = true
+        } else people.push(person)
+      }
+      return { ...f, tags: { ...f.tags, people } }
+    }))
+    setAllTags(prev => ({
+      ...prev,
+      people: withSuggestions(prev.people.filter(p => !sources.has(p.toLowerCase())), [target])
+    }))
+    markTagsChanged()
+  }, [markTagsChanged])
+
   const isDefault = !!rootPath && folderKey(settings.defaultFolder) === folderKey(rootPath)
+
+  if (access !== 'ready') {
+    return (
+      <ThemeProvider theme={darkTheme}>
+        <CssBaseline />
+        <Box sx={{
+          height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          bgcolor: 'background.default', p: 2
+        }}>
+          <Box sx={{
+            width: 380, p: 3, bgcolor: 'background.paper', borderRadius: 2,
+            display: 'flex', flexDirection: 'column', gap: 1.5
+          }}>
+            <Typography variant="h6">Підключення до сервера</Typography>
+            {access === 'checking' && (
+              <Typography color="text.secondary">Перевірка сервера…</Typography>
+            )}
+            {access === 'offline' && (
+              <>
+                <Typography color="text.secondary">
+                  Немає зв'язку з сервером. Перевірте, що API запущений і адреса починається з https://.
+                </Typography>
+                <Button variant="contained" onClick={() => setConnectAttempt(n => n + 1)}>Спробувати знову</Button>
+              </>
+            )}
+            {access === 'need-key' && (
+              <>
+                <Typography color="text.secondary">
+                  Сервер у мережі закритий ключем. Він написаний у консолі API на NAS і у файлі access-key.txt.
+                </Typography>
+                <TextField size="small" type="password" label="Ключ доступу" value={keyDraft} autoFocus
+                  error={!!keyError} helperText={keyError}
+                  onChange={e => { setKeyDraft(e.target.value); setKeyError('') }}
+                  onKeyDown={e => { if (e.key === 'Enter' && keyDraft.trim()) submitKey() }} />
+                <Button variant="contained" onClick={submitKey} disabled={!keyDraft.trim()}>Підключити</Button>
+              </>
+            )}
+          </Box>
+        </Box>
+      </ThemeProvider>
+    )
+  }
 
   return (
     <ThemeProvider theme={darkTheme}>
@@ -328,10 +492,19 @@ export default function App() {
           </Box>
 
           <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            <Button fullWidth variant="outlined" size="small"
-              startIcon={<FolderIcon />} onClick={handleSelectRoot}>
-              {rootPath ? 'Змінити папку' : 'Відкрити папку'}
-            </Button>
+            {apiIsLocal && (
+              <Button fullWidth variant="outlined" size="small"
+                startIcon={<FolderIcon />} onClick={handleSelectRoot}>
+                {libraryRoots.length ? 'Додати папку' : 'Відкрити папку'}
+              </Button>
+            )}
+            <TextField size="small" fullWidth placeholder="Додати шлях" value={pathDraft}
+              onChange={e => setPathDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter' || !pathDraft.trim()) return
+                addRoot(pathDraft.trim())
+                setPathDraft('')
+              }} />
             {settings.recentFolders.length > 0 && (
               <>
                 <Button fullWidth variant="text" size="small"
@@ -357,6 +530,28 @@ export default function App() {
               </>
             )}
           </Box>
+
+          {libraryRoots.length > 0 && (
+            <Box sx={{ px: 1, pb: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+              {libraryRoots.map(folder => (
+                <Box key={folderKey(folder)} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Button fullWidth size="small" variant="text"
+                    onClick={() => openFolder(folder)}
+                    sx={{
+                      justifyContent: 'flex-start', fontSize: '0.75rem', minWidth: 0,
+                      color: folderKey(folder) === folderKey(rootPath) ? 'primary.main' : 'text.secondary',
+                      fontWeight: folderKey(folder) === folderKey(rootPath) ? 700 : 400
+                    }}>
+                    <Typography variant="body2" noWrap title={folder}>{folder.split(/[\\/]/).pop()}</Typography>
+                  </Button>
+                  <IconButton size="small" title="Прибрати з бібліотеки" onClick={() => removeRoot(folder)}
+                    sx={{ color: 'text.disabled' }}>
+                    <Typography variant="caption">×</Typography>
+                  </IconButton>
+                </Box>
+              ))}
+            </Box>
+          )}
 
           {rootPath && (
             <Box sx={{ px: 1, pb: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -415,7 +610,7 @@ export default function App() {
             <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
             {tab === 0 && (
               <Box sx={{ flex: 1 }}>
-                <SearchBar allTags={allTags} rootPath={rootPath} onSearch={handleSearch} />
+                <SearchBar allTags={allTags} roots={libraryRoots} onSearch={handleSearch} />
               </Box>
             )}
           </Box>
@@ -469,25 +664,25 @@ export default function App() {
 
               {/* Library — always mounted, hidden when not active */}
               <Box sx={{ display: tab === 1 ? 'block' : 'none', height: '100%' }}>
-                <LibraryPanel rootPath={rootPath} refreshKey={tagsVersion}
-                  active={tab === 1} onFilter={handleLibraryFilter} />
+                <LibraryPanel roots={libraryRoots} refreshKey={tagsVersion}
+                  active={tab === 1} onFilter={handleLibraryFilter} onPeopleRenamed={handlePeopleRenamed} />
               </Box>
 
               {/* Map — always mounted, hidden when not active — preserves zoom/pan state */}
               <Box sx={{ display: tab === 2 ? 'block' : 'none', height: '100%' }}>
-                <MapView rootPath={rootPath} currentFolder={currentFolder}
+                <MapView roots={mapRoots}
                   refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp} />
               </Box>
 
               {/* Faces — suggestions learned from the people already tagged */}
               <Box sx={{ display: tab === 3 ? 'block' : 'none', height: '100%' }}>
-                <FacesPanel rootPath={rootPath} refreshKey={tagsVersion}
+                <FacesPanel roots={libraryRoots} refreshKey={tagsVersion}
                   active={tab === 3} onTagsAdded={handleTagsSaved} />
               </Box>
 
               {/* Places — suggested from places already written on photos taken nearby */}
               <Box sx={{ display: tab === 4 ? 'block' : 'none', height: '100%' }}>
-                <PlacesPanel rootPath={rootPath} refreshKey={tagsVersion}
+                <PlacesPanel roots={libraryRoots} refreshKey={tagsVersion}
                   active={tab === 4} onTagsAdded={handleTagsSaved} />
               </Box>
             </Box>
@@ -498,7 +693,7 @@ export default function App() {
               onSaved={handleTagsSaved}
               onAutoSaved={handleTagsAutoSaved}
               allTags={allTags}
-              rootPath={rootPath}
+              roots={libraryRoots}
             />
           </Box>
         </Box>

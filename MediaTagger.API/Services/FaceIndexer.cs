@@ -22,7 +22,8 @@ public class FaceIndexer : BackgroundService
 
     private readonly SemaphoreSlim _wake = new(0);
     private readonly object _gate = new();
-    private string? _requestedRoot;
+    private string[]? _requestedRoots;
+    private string _scope = "";
     private CancellationTokenSource? _current;
 
     // The same file asked for by the scan and by the side panel at once is analysed once.
@@ -52,14 +53,15 @@ public class FaceIndexer : BackgroundService
         Total = Interlocked.Read(ref _total)
     };
 
-    /// <summary>Starts (or restarts) a pass over <paramref name="root"/>.</summary>
-    public void Start(string root)
+    /// <summary>Starts (or restarts) a pass over every root. One database, one progress bar.</summary>
+    public void Start(IReadOnlyList<string> roots)
     {
+        var scope = FileSystemService.Scope(roots);
         lock (_gate)
         {
             // Asking again for the library already being scanned changes nothing.
-            if (IsActive && string.Equals(_root, root, StringComparison.OrdinalIgnoreCase)) return;
-            _requestedRoot = root;
+            if (IsActive && _scope == scope) return;
+            _requestedRoots = roots.ToArray();
             _current?.Cancel();
         }
         _wake.Release();
@@ -69,7 +71,7 @@ public class FaceIndexer : BackgroundService
     {
         lock (_gate)
         {
-            _requestedRoot = null;
+            _requestedRoots = null;
             _current?.Cancel();
         }
     }
@@ -117,30 +119,30 @@ public class FaceIndexer : BackgroundService
         {
             await _wake.WaitAsync(stopping);
 
-            string? root;
+            string[]? roots;
             CancellationTokenSource run;
             lock (_gate)
             {
-                root = _requestedRoot;
-                if (root == null) continue;
-                _requestedRoot = null;
+                roots = _requestedRoots;
+                if (roots == null) continue;
+                _requestedRoots = null;
                 _current?.Dispose();
                 _current = run = CancellationTokenSource.CreateLinkedTokenSource(stopping);
             }
 
-            try { await ScanAsync(root, run.Token); }
+            try { await ScanAsync(roots, run.Token); }
             catch (OperationCanceledException) { /* replaced by a newer request, or stopped */ }
-            catch (Exception ex) { _logger.LogWarning("Face scan of {Root} failed: {Msg}", root, ex.Message); }
+            catch (Exception ex) { _logger.LogWarning("Face scan of {Root} failed: {Msg}", _scope, ex.Message); }
             finally { Volatile.Write(ref _active, false); }
         }
     }
 
-    private async Task ScanAsync(string root, CancellationToken cancel)
+    private async Task ScanAsync(IReadOnlyList<string> roots, CancellationToken cancel)
     {
-        if (!_analyzer.Available || !Directory.Exists(root)) return;
+        if (!_analyzer.Available || roots.Count == 0) return;
 
         // Listing goes through the library index, which is usually warm already.
-        var files = await Task.Run(() => _fs.GetMediaFiles(root, recursive: true), cancel);
+        var files = await Task.Run(() => _fs.Across(roots), cancel);
 
         // Photos someone is already tagged on go first — they are what the model
         // learns from, so suggestions get useful long before the scan finishes.
@@ -151,13 +153,14 @@ public class FaceIndexer : BackgroundService
             .ThenByDescending(f => f.Tags.DateTaken ?? f.Modified)
             .ToList();
 
-        _root = root;
+        _scope = FileSystemService.Scope(roots);
+        _root = _scope;
         Interlocked.Exchange(ref _processed, 0);
         Interlocked.Exchange(ref _total, pending.Count);
         if (pending.Count == 0) return;
 
         Volatile.Write(ref _active, true);
-        _logger.LogInformation("Face scan of {Root}: {Count} files to analyse", root, pending.Count);
+        _logger.LogInformation("Face scan of {Root}: {Count} files to analyse", _scope, pending.Count);
 
         await Parallel.ForEachAsync(pending,
             new ParallelOptions { MaxDegreeOfParallelism = Workers, CancellationToken = cancel },
@@ -167,7 +170,7 @@ public class FaceIndexer : BackgroundService
                 Interlocked.Increment(ref _processed);
             });
 
-        _logger.LogInformation("Face scan of {Root} finished", root);
+        _logger.LogInformation("Face scan of {Root} finished", _scope);
     }
 }
 

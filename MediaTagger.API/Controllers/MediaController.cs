@@ -108,15 +108,18 @@ public class MediaController : ControllerBase
     [HttpPost("search")]
     public ActionResult<List<MediaFile>> Search([FromBody] SearchRequest request)
     {
-        if (!Directory.Exists(request.RootPath)) return BadRequest("Root path not found");
+        if (FileSystemService.Collapse(
+                request.RootPaths is { Count: > 0 } ? request.RootPaths : new[] { request.RootPath }).Length == 0)
+            return BadRequest("Root path not found");
         return Ok(_fs.Search(request));
     }
 
     [HttpGet("all-tags")]
-    public ActionResult<AllTagsResponse> GetAllTags([FromQuery] string rootPath)
+    public ActionResult<AllTagsResponse> GetAllTags([FromQuery] string[] rootPath)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        return Ok(_fs.GetAllTags(rootPath));
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        return Ok(_fs.GetAllTags(roots));
     }
 
     /// <summary>
@@ -190,18 +193,19 @@ public class MediaController : ControllerBase
     }
 
     [HttpGet("map-files")]
-    public ActionResult<List<MediaFile>> GetFilesWithCoordinates([FromQuery] string rootPath)
+    public ActionResult<List<MediaFile>> GetFilesWithCoordinates([FromQuery] string[] rootPath)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        var files = _fs.GetMediaFiles(rootPath, recursive: true)
-            .Where(f => f.Tags.Coordinates != null).ToList();
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        var files = _fs.Across(roots).Where(f => f.Tags.Coordinates != null).ToList();
         return Ok(files);
     }
 
     [HttpGet("library-stats")]
-    public ActionResult<LibraryStats> GetLibraryStats([FromQuery] string rootPath)
+    public ActionResult<LibraryStats> GetLibraryStats([FromQuery] string[] rootPath)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        return Ok(_fs.GetLibraryStats(rootPath));
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        return Ok(_fs.GetLibraryStats(roots));
     }
 }

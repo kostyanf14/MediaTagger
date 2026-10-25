@@ -16,7 +16,7 @@ const TILE_H = 90
 const PAGE_SIZE = 60
 
 interface Props {
-  rootPath: string
+  roots: string[]
   /** Bumped whenever tags change anywhere — a new place is new evidence. */
   refreshKey: number
   /** Only the visible tab refetches. */
@@ -29,7 +29,7 @@ function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} м` : `${(meters / 1000).toFixed(1)} км`
 }
 
-export function PlacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props) {
+export function PlacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   const [data, setData] = useState<PlaceSuggestionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   // Files answered this session — applied, or hidden with ✗. Hidden ones come back
@@ -39,24 +39,24 @@ export function PlacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props
   const loadedFor = useRef<string | null>(null)
 
   const load = useCallback((quiet = false) => {
-    if (!rootPath) return
+    if (!roots.length) return
     if (!quiet) setLoading(true)
-    placesApi.suggestions(rootPath)
+    placesApi.suggestions(roots)
       .then(r => setData(r.data))
       .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
-  }, [rootPath])
+  }, [roots])
 
   useEffect(() => {
-    if (!rootPath || !active) return
-    const signature = `${rootPath}|${refreshKey}`
+    if (!roots.length || !active) return
+    const signature = `${roots.join('\n')}|${refreshKey}`
     if (loadedFor.current === signature) return
-    const quiet = loadedFor.current?.startsWith(`${rootPath}|`) ?? false
+    const quiet = loadedFor.current?.startsWith(`${roots.join('\n')}|`) ?? false
     loadedFor.current = signature
     load(quiet)
-  }, [rootPath, refreshKey, active, load])
+  }, [roots, refreshKey, active, load])
 
-  useEffect(() => { setData(null); setDecided(new Set()); setShown({}) }, [rootPath])
+  useEffect(() => { setData(null); setDecided(new Set()); setShown({}) }, [roots])
 
   const hide = (items: PlaceSuggestion[]) =>
     setDecided(prev => { const next = new Set(prev); items.forEach(i => next.add(i.filePath)); return next })
@@ -75,7 +75,7 @@ export function PlacesPanel({ rootPath, refreshKey, active, onTagsAdded }: Props
     }
   }
 
-  if (!rootPath) return (
+  if (!roots.length) return (
     <Box sx={{ p: 3, textAlign: 'center' }}>
       <Typography color="text.secondary">Оберіть папку</Typography>
     </Box>

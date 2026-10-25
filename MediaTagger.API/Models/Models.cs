@@ -81,6 +81,8 @@ public class SearchRequest
     public List<string>? Albums { get; set; }
     public List<string>? Groups { get; set; }
     public string RootPath { get; set; } = "";
+    /// <summary>When set, the search covers each of these instead of <see cref="RootPath"/> alone.</summary>
+    public List<string> RootPaths { get; set; } = new();
 }
 
 public class AllTagsResponse
@@ -173,6 +175,14 @@ public class FaceDecision
     public long FaceId { get; set; }
     public string FilePath { get; set; } = "";
     public string Person { get; set; } = "";
+}
+
+/// <summary>Every name in <see cref="From"/> becomes <see cref="To"/>, in tags and on confirmed faces.</summary>
+public class RenamePeopleRequest
+{
+    public List<string> RootPaths { get; set; } = new();
+    public List<string> From { get; set; } = new();
+    public string To { get; set; } = "";
 }
 
 public class AcceptFacesRequest

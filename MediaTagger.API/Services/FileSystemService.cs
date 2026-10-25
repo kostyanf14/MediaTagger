@@ -23,10 +23,49 @@ public class FileSystemService
         return _index.Query(folderPath, recursive);
     }
 
+    /// <summary>Files under every root, once. A root inside another root is skipped.</summary>
+    public List<MediaFile> Across(IEnumerable<string> roots)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new List<MediaFile>();
+        foreach (var root in Collapse(roots))
+            foreach (var file in GetMediaFiles(root, recursive: true))
+                if (seen.Add(file.FilePath))
+                    files.Add(file);
+        return files;
+    }
+
+    /// <summary>Drops blanks, missing folders, and a folder that already sits inside another.</summary>
+    public static string[] Collapse(IEnumerable<string>? roots)
+    {
+        var list = new List<string>();
+        foreach (var raw in roots ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(raw) || !Directory.Exists(raw)) continue;
+            string path;
+            try { path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(raw)); }
+            catch { continue; }
+            if (list.Any(other => IsUnder(path, other))) continue;
+            list.RemoveAll(other => IsUnder(other, path));
+            list.Add(path);
+        }
+        return list.ToArray();
+    }
+
+    public static string Scope(IEnumerable<string> roots) =>
+        string.Join("\n", roots.OrderBy(r => r, StringComparer.OrdinalIgnoreCase));
+
+    private static bool IsUnder(string path, string root)
+    {
+        if (path.Equals(root, StringComparison.OrdinalIgnoreCase)) return true;
+        return path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Call after changing a folder's contents directly, e.g. deleting a file.</summary>
     public void InvalidateFolder(string folderPath) => _index.Invalidate(folderPath);
 
-    public AllTagsResponse GetAllTags(string rootPath)
+    public AllTagsResponse GetAllTags(IEnumerable<string> roots)
     {
         var people = new HashSet<string>();
         var groups = new HashSet<string>();
@@ -35,7 +74,7 @@ public class FileSystemService
         // it feeds work the same way.
         var places = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in GetMediaFiles(rootPath, recursive: true))
+        foreach (var file in Across(roots))
         {
             var tags = file.Tags;
             tags.People.ForEach(p => people.Add(p));
@@ -53,14 +92,14 @@ public class FileSystemService
         };
     }
 
-    public LibraryStats GetLibraryStats(string rootPath)
+    public LibraryStats GetLibraryStats(IEnumerable<string> roots)
     {
         var albums  = new Dictionary<string, (int Count, string? Cover)>();
         var people  = new Dictionary<string, (int Count, string? Cover)>();
         var places  = new Dictionary<string, (int Count, string? Cover)>();
         var groups  = new Dictionary<string, (int Count, string? Cover)>();
 
-        foreach (var file in GetMediaFiles(rootPath, recursive: true))
+        foreach (var file in Across(roots))
         {
             var tags = file.Tags;
 
@@ -111,7 +150,8 @@ public class FileSystemService
 
     public List<MediaFile> Search(SearchRequest request)
     {
-        var allFiles = GetMediaFiles(request.RootPath, recursive: true);
+        var roots = request.RootPaths is { Count: > 0 } ? request.RootPaths : new List<string> { request.RootPath };
+        var allFiles = Across(roots);
 
         return allFiles.Where(f =>
         {

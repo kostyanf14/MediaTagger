@@ -9,13 +9,37 @@ namespace MediaTagger.API.Services;
 public class CacheLocator
 {
     private readonly string _root;
+    private readonly bool _explicit;
     private readonly ILogger<CacheLocator> _logger;
 
-    public CacheLocator(IHostEnvironment env, ILogger<CacheLocator> logger)
+    public CacheLocator(IHostEnvironment env, IConfiguration config, ILogger<CacheLocator> logger)
     {
         _logger = logger;
-        _root = ResolveRoot(env);
+        var configured = config["MediaTagger:CacheRoot"];
+        _explicit = !string.IsNullOrWhiteSpace(configured);
+        _root = ResolveRoot(env.ContentRootPath, configured, logger);
         _logger.LogInformation("Cache root: {Path}", _root);
+    }
+
+    /// <summary>The folder for generated data. A configured path wins; otherwise the solution, then LocalAppData.</summary>
+    public static string ResolveRoot(string contentRootPath, string? configured, ILogger? logger = null)
+    {
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            var root = Path.GetFullPath(configured);
+            Directory.CreateDirectory(root);
+            return root;
+        }
+
+        var solutionRoot = Directory.GetParent(contentRootPath)?.FullName ?? contentRootPath;
+        if (IsWritable(solutionRoot, out var reason)) return solutionRoot;
+
+        var fallback = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MediaTagger");
+        Directory.CreateDirectory(fallback);
+        logger?.LogWarning("Cannot use {Preferred} for cache data ({Reason}), falling back to {Fallback}",
+            solutionRoot, reason, fallback);
+        return fallback;
     }
 
     /// <summary>Returns (creating if needed) a named folder under the cache root.</summary>
@@ -28,22 +52,26 @@ public class CacheLocator
 
     /// <summary>Returns the full path for a cache file, its folder already created.</summary>
     public string GetFilePath(string folderName, string fileName)
-        => Path.Combine(GetDirectory(folderName), fileName);
-
-    private string ResolveRoot(IHostEnvironment env)
     {
-        // The API project sits one level below the solution, which is where these
-        // folders belong — beside the code rather than buried in AppData.
-        var solutionRoot = Directory.GetParent(env.ContentRootPath)?.FullName ?? env.ContentRootPath;
-
-        if (IsWritable(solutionRoot, out var reason)) return solutionRoot;
-
-        var fallback = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MediaTagger");
-        Directory.CreateDirectory(fallback);
-        _logger.LogWarning("Cannot use {Preferred} for cache data ({Reason}), falling back to {Fallback}",
-            solutionRoot, reason, fallback);
-        return fallback;
+        // A chosen directory is the cache. The dot folder only hides the databases
+        // when they would otherwise sit next to the solution.
+        if (_explicit && folderName == ".cache")
+        {
+            var direct = Path.Combine(_root, fileName);
+            var nested = Path.Combine(_root, folderName, fileName);
+            if (!File.Exists(direct) && File.Exists(nested))
+            {
+                foreach (var suffix in new[] { "", "-wal", "-shm" })
+                {
+                    var from = nested + suffix;
+                    if (File.Exists(from)) File.Move(from, direct + suffix);
+                }
+                var dir = Path.GetDirectoryName(nested)!;
+                if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+            }
+            return direct;
+        }
+        return Path.Combine(GetDirectory(folderName), fileName);
     }
 
     private static bool IsWritable(string directory, out string reason)

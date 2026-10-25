@@ -26,23 +26,32 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 
-// Allow large video files to be streamed
+// Localhost stays open. Any other listen address is the NAS case: HTTPS plus one key.
+var gate = NetworkAccess.Prepare(
+    builder.Environment.ContentRootPath,
+    builder.Configuration["MediaTagger:ListenUrl"],
+    builder.Configuration["MediaTagger:CacheRoot"],
+    builder.Configuration["MediaTagger:AccessKey"]);
+
 builder.WebHost.ConfigureKestrel(opts =>
 {
     opts.Limits.MaxRequestBodySize = null;
+    if (gate.Certificate != null)
+        opts.ConfigureHttpsDefaults(https => https.ServerCertificate = gate.Certificate);
 });
+builder.WebHost.UseUrls(gate.ListenUrl);
 
 var app = builder.Build();
 
-app.UseSwagger();
-app.UseSwaggerUI();
+// Swagger is a map of every route. Keep it for the local app; the NAS does not serve it.
+if (gate.Key is null)
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 app.UseCors("ElectronPolicy");
+NetworkAccess.UseKeyCheck(app, gate.Key);
 app.UseStaticFiles();
-app.MapGet("/health", () => Results.Ok("ok"));
+app.MapGet("/health", () => Results.Ok(new { ok = true, auth = gate.Key != null }));
 app.MapControllers();
-
-// appsettings.json names the address; the literal only covers a missing config file.
-if (string.IsNullOrEmpty(app.Configuration["Kestrel:Endpoints:Http:Url"]))
-    app.Run("http://localhost:5001");
-else
-    app.Run();
+app.Run();

@@ -30,10 +30,11 @@ public class FacesController : ControllerBase
 
     /// <summary>Starts finding faces across the library; files already done are skipped.</summary>
     [HttpPost("scan")]
-    public ActionResult<FaceScanStatus> Scan([FromQuery] string rootPath)
+    public ActionResult<FaceScanStatus> Scan([FromQuery] string[] rootPath)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        _indexer.Start(rootPath);
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        _indexer.Start(roots);
         return Ok(_indexer.Status());
     }
 
@@ -49,25 +50,27 @@ public class FacesController : ControllerBase
 
     /// <summary>Photos where a known person seems to appear but is not tagged.</summary>
     [HttpGet("suggestions")]
-    public async Task<ActionResult<FaceSuggestionsResponse>> Suggestions([FromQuery] string rootPath,
+    public async Task<ActionResult<FaceSuggestionsResponse>> Suggestions([FromQuery] string[] rootPath,
         [FromQuery] int perPerson = DefaultPerPerson)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        return Ok(await _recognition.GetSuggestionsAsync(rootPath, Math.Clamp(perPerson, 1, 1000)));
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        return Ok(await _recognition.GetSuggestionsAsync(roots, Math.Clamp(perPerson, 1, 1000)));
     }
 
     /// <summary>Faces in one file, analysed on the spot if the scan has not got to it yet.</summary>
     [HttpGet("file")]
-    public async Task<ActionResult<FileFacesResponse>> FileFaces([FromQuery] string rootPath, [FromQuery] string filePath)
+    public async Task<ActionResult<FileFacesResponse>> FileFaces([FromQuery] string[] rootPath, [FromQuery] string filePath)
     {
+        var roots = FileSystemService.Collapse(rootPath);
         var folder = Path.GetDirectoryName(filePath) ?? "";
-        if (!System.IO.File.Exists(filePath) || !Directory.Exists(rootPath)) return NotFound();
+        if (!System.IO.File.Exists(filePath) || roots.Length == 0) return NotFound();
 
         var file = _fs.GetMediaFiles(folder)
             .FirstOrDefault(f => string.Equals(f.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
         if (file == null) return NotFound();
 
-        return Ok(await _recognition.GetFileFacesAsync(rootPath, file));
+        return Ok(await _recognition.GetFileFacesAsync(roots, file));
     }
 
     /// <summary>A square picture of one face, cut from the file's thumbnail.</summary>
@@ -105,6 +108,24 @@ public class FacesController : ControllerBase
         }
 
         return Ok(items.Count);
+    }
+
+    /// <summary>Renames people, or folds several names into one. Tags under the roots and confirmed faces both move.</summary>
+    [HttpPost("people")]
+    public ActionResult<int> RenamePeople([FromBody] RenamePeopleRequest request)
+    {
+        var to = request.To?.Trim() ?? "";
+        var from = (request.From ?? new List<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (to.Length == 0 || from.Count == 0) return BadRequest("Name required");
+        if (from.All(n => n.Equals(to, StringComparison.Ordinal))) return Ok(0);
+
+        var folders = _tags.RenamePeople(request.RootPaths ?? new List<string>(), from, to);
+        _store.RenamePeople(from, to);
+        return Ok(folders);
     }
 
     /// <summary>Turns down suggestions, so the same face is not offered as that person again.</summary>

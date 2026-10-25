@@ -3,14 +3,78 @@ const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
+const https = require('https')
 
 let mainWindow
 let dotnetProcess
 
-const API_URL = 'http://localhost:5001'
+const API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || 'http://localhost:5001').replace(/\/$/, '')
 const CLIENT_URL = process.env.NODE_ENV === 'development'
-  ? 'http://localhost:3000'
+  ? (process.env.MEDIATAGGER_CLIENT_URL || 'http://localhost:3000')
   : `file://${path.join(__dirname, '../mediaTagger.client/build/index.html')}`
+
+function isLoopback(url) {
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return true
+  }
+}
+
+function normFingerprint(value) {
+  const text = String(value || '').trim()
+  // Electron's fingerprint is "sha256/<base64>". Node's is colon-separated hex.
+  const marked = text.match(/^sha256\/(.+)$/i)
+  if (marked) return Buffer.from(marked[1], 'base64').toString('hex').toUpperCase()
+  return text.toUpperCase().replace(/[^0-9A-F]/g, '')
+}
+
+function pinFile() {
+  let host = 'api'
+  try { host = new URL(API_URL).hostname } catch {}
+  return path.join(app.getPath('userData'), `nas-cert-${host}`)
+}
+
+// shortcut: the first certificate this host presents is pinned. Someone who can
+// spoof the NAS on that first connection would be trusted. Delete the pin file
+// after you replace the NAS certificate.
+function rememberCert(fingerprint) {
+  const fp = normFingerprint(fingerprint)
+  if (!fp) return false
+  const file = pinFile()
+  let saved = ''
+  try { saved = normFingerprint(fs.readFileSync(file, 'utf8')) } catch {}
+  // The first build stored a SHA-1 pin. Both sides can only agree on SHA-256.
+  if (!saved || (saved.length === 40 && fp.length === 64)) {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, fp)
+    console.log(`[API] Trusting NAS certificate ${fp}`)
+    return true
+  }
+  if (saved === fp) return true
+  // Every image and retry hits this. One line is enough.
+  if (!rememberCert.logged) {
+    rememberCert.logged = true
+    console.error(`[API] NAS certificate changed. Delete ${file} if you replaced the server certificate.`)
+  }
+  return false
+}
+
+function isApiHost(url) {
+  try {
+    const target = new URL(API_URL)
+    return target.protocol === 'https:' && new URL(url).hostname === target.hostname
+  } catch {
+    return false
+  }
+}
+
+app.on('certificate-error', (event, _webContents, url, _error, certificate, callback) => {
+  if (!isApiHost(url)) { callback(false); return }
+  event.preventDefault()
+  callback(rememberCert(certificate.fingerprint))
+})
 
 // Where `npm run build` in the repo root publishes the Release API.
 const PUBLISHED_API = path.join(
@@ -24,9 +88,10 @@ function startDotnetApi() {
   // first and runs unoptimised code, so it is only the fallback for a checkout
   // that has not been built yet. Both run from the project folder, which is what
   // the API resolves appsettings.json and its caches against.
+  const apiEnv = { ...process.env, MediaTagger__ListenUrl: API_URL }
   dotnetProcess = fs.existsSync(PUBLISHED_API)
-    ? spawn(PUBLISHED_API, [], { cwd: apiPath, stdio: 'pipe' })
-    : spawn('dotnet', ['run'], { cwd: apiPath, stdio: 'pipe' })
+    ? spawn(PUBLISHED_API, [], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
+    : spawn('dotnet', ['run'], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
   dotnetProcess.stdout.on('data', d => process.stdout.write(`[API] ${d}`))
   dotnetProcess.stderr.on('data', d => process.stderr.write(`[API ERR] ${d}`))
 }
@@ -40,11 +105,32 @@ function waitForApi() {
   const deadline = Date.now() + API_TIMEOUT_MS
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      http.get(`${API_URL}/health`, res => { res.resume(); resolve() })
-        .on('error', () => {
-          if (Date.now() < deadline) setTimeout(attempt, API_POLL_MS)
-          else reject(new Error('API did not start'))
-        })
+      const retry = () => {
+        if (Date.now() < deadline) setTimeout(attempt, API_POLL_MS)
+        else reject(new Error('API did not start'))
+      }
+      const lib = API_URL.startsWith('https:') ? https : http
+      const options = API_URL.startsWith('https:') ? { rejectUnauthorized: false } : {}
+      const req = lib.get(`${API_URL}/health`, options, res => {
+        if (API_URL.startsWith('https:')) {
+          const cert = res.socket.getPeerCertificate()
+          const presented = cert && cert.fingerprint256
+          if (!normFingerprint(presented)) {
+            res.resume()
+            retry()
+            return
+          }
+          // A different certificate will not start matching, so do not poll for 30s.
+          if (!rememberCert(presented)) {
+            res.resume()
+            reject(new Error('NAS certificate was rejected'))
+            return
+          }
+        }
+        res.resume()
+        resolve()
+      })
+      req.on('error', retry)
     }
     attempt()
   })
@@ -152,7 +238,8 @@ ipcMain.on('open-file', (event, filePath) => {
 })
 
 app.whenReady().then(async () => {
-  if (process.env.NODE_ENV !== 'development') startDotnetApi()
+  // A remote API (the NAS) is already running; only a loopback URL is started here.
+  if (process.env.NODE_ENV !== 'development' && isLoopback(API_URL)) startDotnetApi()
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

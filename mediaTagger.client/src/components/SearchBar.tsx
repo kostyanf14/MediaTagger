@@ -10,11 +10,11 @@ import { SearchRequest } from '../api/client'
 
 interface Props {
   allTags: { people: string[]; groups: string[]; albums: string[] }
-  rootPath: string
+  roots: string[]
   onSearch: (req: SearchRequest | null) => void
 }
 
-export function SearchBar({ allTags, rootPath, onSearch }: Props) {
+export function SearchBar({ allTags, roots, onSearch }: Props) {
   const [query, setQuery] = useState('')
   const [filterAnchor, setFilterAnchor] = useState<null | HTMLElement>(null)
   const [filterPeople, setFilterPeople] = useState<string[]>([])
@@ -33,7 +33,8 @@ export function SearchBar({ allTags, rootPath, onSearch }: Props) {
       people: filterPeople.length ? filterPeople : undefined,
       albums: filterAlbums.length ? filterAlbums : undefined,
       groups: filterGroups.length ? filterGroups : undefined,
-      rootPath
+      rootPath: roots[0] ?? '',
+      rootPaths: roots
     })
   }
 

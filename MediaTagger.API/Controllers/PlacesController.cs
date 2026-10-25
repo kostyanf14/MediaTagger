@@ -17,17 +17,19 @@ public class PlacesController : ControllerBase
     public PlacesController(PlaceSuggestionService places) => _places = places;
 
     [HttpGet("suggestions")]
-    public ActionResult<PlaceSuggestionsResponse> Suggestions([FromQuery] string rootPath)
+    public ActionResult<PlaceSuggestionsResponse> Suggestions([FromQuery] string[] rootPath)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
-        return Ok(_places.GetSuggestions(rootPath));
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        return Ok(_places.GetSuggestions(roots));
     }
 
     [HttpGet("nearby")]
-    public ActionResult<List<PlaceCandidate>> Nearby([FromQuery] string rootPath, [FromQuery] double lat, [FromQuery] double lng)
+    public ActionResult<List<PlaceCandidate>> Nearby([FromQuery] string[] rootPath, [FromQuery] double lat, [FromQuery] double lng)
     {
-        if (!Directory.Exists(rootPath)) return BadRequest("Folder not found");
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
         if (Math.Abs(lat) > 90 || Math.Abs(lng) > 180) return BadRequest("Coordinates out of range");
-        return Ok(_places.GetNearby(rootPath, lat, lng));
+        return Ok(_places.GetNearby(roots, lat, lng));
     }
 }
