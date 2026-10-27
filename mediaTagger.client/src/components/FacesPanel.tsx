@@ -61,11 +61,11 @@ function scoreColor(score: number): string {
   return 'divider'
 }
 
-/** The whole photo with the face marked, so a crop can be judged in context. */
+/** The whole photo (or the video frame the face was seen in) with the face marked, so a crop can be judged in context. */
 function FaceContext({ item }: { item: FaceSuggestion }) {
   return (
     <Box sx={{ position: 'relative', width: 260 }}>
-      <Box component="img" src={mediaApi.getThumbnailUrl(item.filePath, THUMB_SIZE)} alt={item.fileName}
+      <Box component="img" src={mediaApi.getThumbnailUrl(item.filePath, THUMB_SIZE, item.time)} alt={item.fileName}
         crossOrigin="anonymous" sx={{ width: '100%', display: 'block', borderRadius: 0.5 }} />
       <Box sx={{
         position: 'absolute',

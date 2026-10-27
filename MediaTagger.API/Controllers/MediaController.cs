@@ -126,17 +126,18 @@ public class MediaController : ControllerBase
     /// Preview image for a file. <paramref name="maxSize"/> bounds the longest edge —
     /// grids should always pass it so a 20 MB photo is not shipped for a 200 px tile.
     /// Omit it (or pass 0) to get the original, which is what the lightbox wants.
+    /// For a video, <paramref name="t"/> picks the frame (seconds in) instead of the cover.
     /// </summary>
     [HttpGet("thumbnail")]
     public async Task<IActionResult> GetThumbnail([FromQuery] string filePath, [FromQuery] int maxSize = 0,
-        CancellationToken cancel = default)
+        [FromQuery] double? t = null, CancellationToken cancel = default)
     {
         if (!System.IO.File.Exists(filePath)) return NotFound();
 
         if (maxSize > 0) maxSize = Math.Clamp(maxSize, 64, 2048);
 
         string? cached;
-        try { cached = await _thumbnails.GetThumbnailPath(filePath, maxSize, cancel); }
+        try { cached = await _thumbnails.GetThumbnailPath(filePath, maxSize, cancel, t); }
         // The tile this was for is gone; nobody is waiting on an answer.
         catch (OperationCanceledException) { return new EmptyResult(); }
         if (cached != null) return CacheableFile(cached, "image/jpeg");

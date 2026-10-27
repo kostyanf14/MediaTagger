@@ -116,7 +116,7 @@ public class FaceRecognitionService
         var results = new List<(StoredFace Face, FileFace Result, string? Best, float Score)>();
         foreach (var face in faces.Faces.Where(IsUsable).OrderByDescending(f => f.W * f.H))
         {
-            var result = new FileFace { FaceId = face.Id, X = face.X, Y = face.Y, W = face.W, H = face.H };
+            var result = new FileFace { FaceId = face.Id, X = face.X, Y = face.Y, W = face.W, H = face.H, Time = face.Time };
             var label = _store.GetLabel(face.Id);
             if (label != null && tagged.Contains(label)) result.Person = label;
             else if (model.Assigned.TryGetValue(face.Id, out var assigned) && tagged.Contains(assigned)) result.Person = assigned;
@@ -291,6 +291,7 @@ public class FaceRecognitionService
         FileName = entry.File.FileName,
         Type = entry.File.Type,
         X = face.X, Y = face.Y, W = face.W, H = face.H,
+        Time = face.Time,
         Width = entry.Width,
         Height = entry.Height
     };

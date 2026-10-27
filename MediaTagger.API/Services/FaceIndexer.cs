@@ -84,8 +84,9 @@ public class FaceIndexer : BackgroundService
     {
         var mtime = MtimeOf(file);
         var known = _store.TryGet(file.FilePath, file.Size, mtime);
-        if (known != null) return Task.FromResult<StoredFileFaces?>(known);
-        if (!_analyzer.Available) return Task.FromResult<StoredFileFaces?>(null);
+        // An answer from an older method still beats none when there is no way to redo it.
+        if ((known != null && IsCurrent(known, file)) || !_analyzer.Available)
+            return Task.FromResult(known);
 
         return _inFlight.GetOrAdd(file.FilePath, _ => AnalyzeAndForget(file, mtime, cancel));
     }
@@ -95,14 +96,14 @@ public class FaceIndexer : BackgroundService
         try
         {
             var result = await _analyzer.AnalyzeAsync(file.FilePath, file.Type == "video", cancel);
-            return _store.Save(file.FilePath, file.Size, mtime, result.Width, result.Height, result.Faces);
+            return _store.Save(file.FilePath, file.Size, mtime, MethodOf(file), result.Width, result.Height, result.Faces);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             // Remembered as "no faces" so a file that cannot be read is not retried on every pass.
             _logger.LogDebug("Face analysis failed for {Path}: {Msg}", file.FilePath, ex.Message);
-            return _store.Save(file.FilePath, file.Size, mtime, 0, 0, Array.Empty<(float, float, float, float, float, float[])>());
+            return _store.Save(file.FilePath, file.Size, mtime, MethodOf(file), 0, 0, Array.Empty<DetectedFace>());
         }
         finally
         {
@@ -112,6 +113,11 @@ public class FaceIndexer : BackgroundService
 
     /// <summary>Matches the timestamp form the store keys versions on.</summary>
     public static long MtimeOf(MediaFile file) => file.Modified.ToUniversalTime().Ticks;
+
+    private static int MethodOf(MediaFile file) => FaceAnalyzer.MethodFor(file.Type == "video");
+
+    /// <summary>False for a file analysed the way this version no longer does it.</summary>
+    private static bool IsCurrent(StoredFileFaces known, MediaFile file) => known.Method >= MethodOf(file);
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
     {
@@ -147,7 +153,7 @@ public class FaceIndexer : BackgroundService
         // Photos someone is already tagged on go first — they are what the model
         // learns from, so suggestions get useful long before the scan finishes.
         var pending = files
-            .Where(f => _store.TryGet(f.FilePath, f.Size, MtimeOf(f)) == null)
+            .Where(f => _store.TryGet(f.FilePath, f.Size, MtimeOf(f)) is not { } known || !IsCurrent(known, f))
             .OrderByDescending(f => f.Tags.People.Count > 0)
             .ThenBy(f => f.Type == "video")
             .ThenByDescending(f => f.Tags.DateTaken ?? f.Modified)

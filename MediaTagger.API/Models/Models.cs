@@ -118,6 +118,8 @@ public class FaceSuggestion
     public float Y { get; set; }
     public float W { get; set; }
     public float H { get; set; }
+    /// <summary>For a video, the frame (seconds in) the box is on; null for a photo.</summary>
+    public double? Time { get; set; }
     /// <summary>Pixel size the box was measured on; the UI needs the aspect ratio to crop square.</summary>
     public int Width { get; set; }
     public int Height { get; set; }
@@ -156,6 +158,8 @@ public class FileFace
     public float Y { get; set; }
     public float W { get; set; }
     public float H { get; set; }
+    /// <summary>For a video, the frame (seconds in) the box is on; null for a photo.</summary>
+    public double? Time { get; set; }
     /// <summary>Who this is, when the tags (or the user) settled it.</summary>
     public string? Person { get; set; }
     /// <summary>Who this might be — someone not tagged on the file yet.</summary>

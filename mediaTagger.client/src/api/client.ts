@@ -50,6 +50,11 @@ function withAccessKey(url: string): string {
   return `${url}${join}access_key=${encodeURIComponent(key)}`
 }
 
+/** Picks one frame of a video; photos (no time) get nothing. */
+function frameParam(time?: number | null): string {
+  return time == null ? '' : `&t=${time.toFixed(3)}`
+}
+
 const accessDenied = new Set<() => void>()
 
 /** Fired when a network API rejects the saved key. Localhost never does this. */
@@ -145,10 +150,11 @@ export interface FaceScanStatus {
   processed: number
   total: number
 }
-/** A face in a file. The box is relative (0..1); width/height are the pixels it was measured on. */
-export interface FaceSuggestion {
+/** Where a face is: a box relative (0..1) to the picture, and for a video the frame (seconds in) it is on. */
+export interface FaceBox { x: number; y: number; w: number; h: number; time?: number | null }
+/** A face in a file. Width/height are the pixels the box was measured on. */
+export interface FaceSuggestion extends FaceBox {
   faceId: number; filePath: string; fileName: string; type: 'image' | 'video'
-  x: number; y: number; w: number; h: number
   width: number; height: number
   person: string; score: number
 }
@@ -157,8 +163,8 @@ export interface LearnedPerson { name: string; faces: number; cover?: FaceSugges
 export interface FaceSuggestionsResponse {
   people: PersonSuggestions[]; learned: LearnedPerson[]; facesTotal: number
 }
-export interface FileFace {
-  faceId: number; x: number; y: number; w: number; h: number
+export interface FileFace extends FaceBox {
+  faceId: number
   person?: string; suggestion?: string; score: number
 }
 export interface FileFacesResponse { width: number; height: number; faces: FileFace[] }
@@ -234,10 +240,11 @@ export const mediaApi = {
   // Thumbnail — JPEG for all formats (HEIC converted, video frame extracted).
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which
   // needs the original. The server caches each size separately.
-  getThumbnailUrl: (filePath: string, maxSize?: number) =>
+  // For a video, time (seconds) picks the frame instead of the cover.
+  getThumbnailUrl: (filePath: string, maxSize?: number, time?: number | null) =>
     withAccessKey(
       `${API_ORIGIN}/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
-      (maxSize ? `&maxSize=${maxSize}` : '')),
+      (maxSize ? `&maxSize=${maxSize}` : '') + frameParam(time)),
 
   // Stream — for video playback, supports HTTP Range (seeking)
   getStreamUrl: (filePath: string) =>
@@ -262,11 +269,12 @@ export const facesApi = {
   // One name, or several folded into one. Tags under the roots and confirmed faces both move.
   renamePeople: (roots: string | string[], from: string[], to: string) =>
     api.post<number>('/faces/people', { rootPaths: asRoots(roots), from, to }),
-  // A square JPEG around one face, cut from the file's thumbnail.
-  getCropUrl: (filePath: string, box: { x: number; y: number; w: number; h: number }, size: number) =>
+  // A square JPEG around one face, cut from the file's thumbnail (a video's from the frame it was seen in).
+  getCropUrl: (filePath: string, box: FaceBox, size: number) =>
     withAccessKey(
       `${API_ORIGIN}/api/faces/crop?filePath=${encodeURIComponent(filePath)}` +
-      `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}`)
+      `&x=${box.x.toFixed(4)}&y=${box.y.toFixed(4)}&w=${box.w.toFixed(4)}&h=${box.h.toFixed(4)}&size=${size}` +
+      frameParam(box.time))
 }
 
 // Accepting a place is a plain bulk tag write — mediaApi.bulkAddTags with `place`.
