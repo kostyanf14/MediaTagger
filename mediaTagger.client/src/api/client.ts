@@ -133,6 +133,14 @@ export type VideoFaceMode = 'Off' | 'Cover' | 'Frames' | 'Detailed'
 export interface AppSettings {
   defaultFolder: string; recentFolders: string[]; libraryFolders?: string[]
   videoFaces?: VideoFaceMode
+  /** CPU threads for the face scan; 0 or absent lets the server pick. */
+  faceThreads?: number
+  faceGpu?: boolean
+}
+/** What the face scan runs on. */
+export interface FaceDeviceInfo {
+  processorCount: number; autoThreads: number; threads: number
+  gpuSupported: boolean; usingGpu: boolean; gpuError?: string | null
 }
 export interface ScanProgress {
   active: boolean
@@ -262,6 +270,8 @@ export const facesApi = {
     api.post<FaceScanStatus>('/faces/scan', null, { params: rootQuery(roots) }),
   stop: () => api.post<FaceScanStatus>('/faces/stop'),
   status: () => api.get<FaceScanStatus>('/faces/status'),
+  // Loads the models if they are not loaded yet, so the first call can take a second.
+  device: () => api.get<FaceDeviceInfo>('/faces/device'),
   suggestions: (roots: string | string[], perPerson?: number) =>
     api.get<FaceSuggestionsResponse>('/faces/suggestions', { params: rootQuery(roots, { perPerson }) }),
   file: (roots: string | string[], filePath: string) =>

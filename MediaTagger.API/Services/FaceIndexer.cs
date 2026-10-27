@@ -11,10 +11,6 @@ namespace MediaTagger.API.Services;
 /// </summary>
 public class FaceIndexer : BackgroundService
 {
-    // Decoding is the slow step and mostly waits on the disk and libjpeg, so a few
-    // run side by side; the models themselves are shared and take turns.
-    private static readonly int Workers = Math.Clamp(Environment.ProcessorCount / 4, 1, 3);
-
     private readonly FileSystemService _fs;
     private readonly FaceStore _store;
     private readonly FaceAnalyzer _analyzer;
@@ -24,7 +20,7 @@ public class FaceIndexer : BackgroundService
     private readonly SemaphoreSlim _wake = new(0);
     private readonly object _gate = new();
     private string[]? _requestedRoots;
-    // What the last pass covered, so a change of video mode can redo it.
+    // What the last pass covered, so a change of settings can redo it.
     private string[]? _lastRoots;
     private string _scope = "";
     private CancellationTokenSource? _current;
@@ -47,7 +43,9 @@ public class FaceIndexer : BackgroundService
         _logger = logger;
         _settings.Changed += (before, after) =>
         {
-            if (before.VideoFaces != after.VideoFaces) Rescan();
+            if (before.VideoFaces != after.VideoFaces || before.FaceThreads != after.FaceThreads
+                || before.FaceGpu != after.FaceGpu)
+                Rescan();
         };
     }
 
@@ -76,7 +74,7 @@ public class FaceIndexer : BackgroundService
         _wake.Release();
     }
 
-    /// <summary>Starts the last pass over again, even if it is still running, so it picks up a new video mode.</summary>
+    /// <summary>Starts the last pass over again, even if it is still running, so it picks up changed settings.</summary>
     private void Rescan()
     {
         lock (_gate)
@@ -198,8 +196,11 @@ public class FaceIndexer : BackgroundService
         Volatile.Write(ref _active, true);
         _logger.LogInformation("Face scan of {Root}: {Count} files to analyse", _scope, pending.Count);
 
+        // Decoding is the slow step, so the threads the settings allow go to files
+        // side by side; the models are shared out among them by the analyzer.
+        var workers = _analyzer.CurrentPlan().Workers;
         await Parallel.ForEachAsync(pending,
-            new ParallelOptions { MaxDegreeOfParallelism = Workers, CancellationToken = cancel },
+            new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancel },
             async (file, token) =>
             {
                 await EnsureAnalyzedAsync(file, token);

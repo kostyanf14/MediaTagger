@@ -222,9 +222,10 @@ export default function App() {
     else setAccess('offline')
   }
 
+  // Resolves once the server has the new settings, for whoever needs to see their effect.
   const saveSettings = useCallback((updated: AppSettings) => {
     setSettings(updated)
-    settingsApi.save(updated).catch(() => {})
+    return settingsApi.save(updated).catch(() => {})
   }, [])
 
   const addToRecent = useCallback((path: string, current: AppSettings): AppSettings => {

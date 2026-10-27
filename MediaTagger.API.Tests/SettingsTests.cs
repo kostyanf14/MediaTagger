@@ -43,3 +43,29 @@ public class SettingsTests
         finally { File.Delete(path); }
     }
 }
+
+public class FacePlanTests
+{
+    [Fact]
+    public void Automatic_leaves_most_of_the_machine_free()
+    {
+        var plan = FaceAnalyzer.PlanFor(0, false, 16);
+        Assert.Equal(4, plan.Threads);
+        Assert.Equal(4, plan.Workers);
+        Assert.Equal(1, plan.Copies);
+        Assert.Equal(2, FaceAnalyzer.PlanFor(0, false, 4).Threads);
+    }
+
+    [Fact]
+    public void Chosen_threads_go_to_files_with_a_model_copy_per_four()
+    {
+        var plan = FaceAnalyzer.PlanFor(16, true, 16);
+        Assert.Equal((16, 16, 4, 2, true), (plan.Threads, plan.Workers, plan.Copies, plan.ModelThreads, plan.Gpu));
+
+        var single = FaceAnalyzer.PlanFor(1, false, 16);
+        Assert.Equal((1, 1, 1), (single.Workers, single.Copies, single.ModelThreads));
+
+        // More than the machine has is capped at what it has.
+        Assert.Equal(8, FaceAnalyzer.PlanFor(64, false, 8).Threads);
+    }
+}

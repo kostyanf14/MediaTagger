@@ -1,7 +1,6 @@
 using FaceAiSharp;
 using ImageMagick;
 using MediaTagger.API.Models;
-using SessionOptions = Microsoft.ML.OnnxRuntime.SessionOptions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -43,39 +42,98 @@ public class FaceAnalyzer : IDisposable
     private static (double Spacing, int MaxFrames) Sampling(VideoFaceMode mode) =>
         mode == VideoFaceMode.Detailed ? (1, 48) : (2, 16);
 
-    private readonly ThumbnailService _thumbnails;
-    private readonly ILogger<FaceAnalyzer> _logger;
-    private readonly Lazy<(IFaceDetectorWithLandmarks Detector, IFaceEmbeddingsGenerator Embedder)?> _models;
+    /// <summary>
+    /// How the work is spread for a given number of CPU threads. Decoding a photo takes
+    /// longer than finding its faces, so the threads go to files decoded side by side,
+    /// with a copy of the models per four of them to keep up. More threads inside one
+    /// model stop paying off after a few, and past the core count they make it slower.
+    /// Embeddings stay on the CPU even with the graphics card on, so it needs the same
+    /// copies.
+    /// </summary>
+    public sealed record Plan(int Threads, int Workers, int Copies, int ModelThreads, bool Gpu);
 
-    // The models are shared: loading a second copy costs more memory than the
-    // parallel decoding around them gains back. Decoding is the slow part anyway.
-    private readonly object _detectGate = new();
-    private readonly object _embedGate = new();
-
-    public FaceAnalyzer(ThumbnailService thumbnails, ILogger<FaceAnalyzer> logger)
+    public static Plan PlanFor(int threads, bool gpu, int processors)
     {
-        _thumbnails = thumbnails;
-        _logger = logger;
-        _models = new Lazy<(IFaceDetectorWithLandmarks, IFaceEmbeddingsGenerator)?>(LoadModels);
+        var n = threads > 0 ? Math.Clamp(threads, 1, processors) : AutoThreads(processors);
+        return new Plan(n, Workers: n, Copies: Math.Max(1, n / 4), ModelThreads: Math.Min(n, 2), gpu);
     }
 
-    public bool Available => _models.Value != null;
+    /// <summary>Leaves most of the machine to whoever is using it while the scan runs.</summary>
+    public static int AutoThreads(int processors) => Math.Clamp(processors / 4, 2, 4);
+
+    private readonly ThumbnailService _thumbnails;
+    private readonly SettingsService _settings;
+    private readonly ILogger<FaceAnalyzer> _logger;
+
+    private readonly object _poolGate = new();
+    private FaceModelPool? _pool;
+    private (int Copies, int Threads, bool Gpu) _poolKey;
+
+    public FaceAnalyzer(ThumbnailService thumbnails, SettingsService settings, ILogger<FaceAnalyzer> logger)
+    {
+        _thumbnails = thumbnails;
+        _settings = settings;
+        _logger = logger;
+    }
+
+    public Plan CurrentPlan()
+    {
+        var settings = _settings.Get();
+        return PlanFor(settings.FaceThreads, settings.FaceGpu, Environment.ProcessorCount);
+    }
+
+    public bool Available => Pool().Available;
+
+    /// <summary>Whether detection ended up on the graphics card, and why not when it was meant to.</summary>
+    public (bool UsingGpu, string? GpuError) Device()
+    {
+        var pool = Pool();
+        return (pool.UsingGpu, pool.GpuError);
+    }
+
+    /// <summary>
+    /// The models as the settings currently ask for them. A change of settings builds a
+    /// new pool on first use; copies of the old one are freed as their pictures finish.
+    /// </summary>
+    private FaceModelPool Pool()
+    {
+        var plan = CurrentPlan();
+        var key = (plan.Copies, plan.ModelThreads, plan.Gpu);
+        lock (_poolGate)
+        {
+            if (_pool != null && _poolKey == key) return _pool;
+            _pool?.Retire();
+            _pool = new FaceModelPool(plan.Copies, plan.ModelThreads, plan.Gpu, _logger);
+            _poolKey = key;
+            return _pool;
+        }
+    }
+
+    private async Task<FaceModelPool.Lease> RentAsync(CancellationToken cancel)
+    {
+        // A pool retired between asking for it and borrowing from it hands out nothing.
+        while (true)
+        {
+            var lease = await Pool().RentAsync(cancel);
+            if (lease != null) return lease;
+        }
+    }
 
     public sealed record Result(int Width, int Height, List<DetectedFace> Faces);
 
     /// <summary>Faces in the file, or an empty result when it cannot be read at all.</summary>
     public async Task<Result> AnalyzeAsync(string filePath, bool isVideo, VideoFaceMode mode, CancellationToken cancel)
     {
-        var models = _models.Value ?? throw new InvalidOperationException("Face models are not available");
+        if (!Available) throw new InvalidOperationException("Face models are not available");
         if (isVideo && mode is VideoFaceMode.Frames or VideoFaceMode.Detailed)
         {
-            var video = await AnalyzeVideoAsync(models, filePath, mode, cancel);
+            var video = await AnalyzeVideoAsync(filePath, mode, cancel);
             if (video != null) return video;
         }
 
         using var image = await LoadAsync(filePath, isVideo, cancel);
         if (image == null) return new Result(0, 0, new());
-        return new Result(image.Width, image.Height, Detect(models, image, null, cancel));
+        return new Result(image.Width, image.Height, await DetectAsync(image, null, cancel));
     }
 
     /// <summary>
@@ -83,8 +141,7 @@ public class FaceAnalyzer : IDisposable
     /// per person. Null when no frame could be grabbed, so the caller can fall back to
     /// the cover frame the grid shows.
     /// </summary>
-    private async Task<Result?> AnalyzeVideoAsync((IFaceDetectorWithLandmarks Detector, IFaceEmbeddingsGenerator Embedder) models,
-        string filePath, VideoFaceMode mode, CancellationToken cancel)
+    private async Task<Result?> AnalyzeVideoAsync(string filePath, VideoFaceMode mode, CancellationToken cancel)
     {
         var duration = await _thumbnails.GetVideoDurationAsync(filePath);
         if (duration <= 0) return null;
@@ -107,7 +164,7 @@ public class FaceAnalyzer : IDisposable
             using (image)
             {
                 (width, height) = (image.Width, image.Height);
-                frames.Add(Detect(models, image, seconds, cancel));
+                frames.Add(await DetectAsync(image, seconds, cancel));
             }
         }
 
@@ -128,11 +185,11 @@ public class FaceAnalyzer : IDisposable
             .ToArray();
     }
 
-    private List<DetectedFace> Detect((IFaceDetectorWithLandmarks Detector, IFaceEmbeddingsGenerator Embedder) models,
-        Image<Rgb24> image, double? seconds, CancellationToken cancel)
+    private async Task<List<DetectedFace>> DetectAsync(Image<Rgb24> image, double? seconds, CancellationToken cancel)
     {
-        IReadOnlyCollection<FaceDetectorResult> detected;
-        lock (_detectGate) detected = models.Detector.DetectFaces(image);
+        using var lease = await RentAsync(cancel);
+        var models = lease.Models;
+        var detected = models.Detector.DetectFaces(image);
 
         var faces = new List<DetectedFace>();
         foreach (var face in detected)
@@ -143,7 +200,6 @@ public class FaceAnalyzer : IDisposable
 
             float[] embedding;
             using (var aligned = image.Clone())
-            lock (_embedGate)
             {
                 models.Embedder.AlignFaceUsingLandmarks(aligned, face.Landmarks);
                 embedding = models.Embedder.GenerateEmbedding(aligned);
@@ -222,32 +278,9 @@ public class FaceAnalyzer : IDisposable
         return vector;
     }
 
-    private (IFaceDetectorWithLandmarks, IFaceEmbeddingsGenerator)? LoadModels()
-    {
-        try
-        {
-            // A couple of threads per model: enough to keep up with decoding, while
-            // leaving the rest of the machine to whoever is using it.
-            var options = new SessionOptions { IntraOpNumThreads = 2, InterOpNumThreads = 1 };
-            var detector = FaceAiSharpBundleFactory.CreateFaceDetectorWithLandmarks(options);
-            var embedder = FaceAiSharpBundleFactory.CreateFaceEmbeddingsGenerator(options);
-            _logger.LogInformation("Face recognition models loaded");
-            return (detector, embedder);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("Face recognition is unavailable, models failed to load: {Msg}", ex.Message);
-            return null;
-        }
-    }
-
     public void Dispose()
     {
-        if (_models.IsValueCreated && _models.Value is { } models)
-        {
-            (models.Detector as IDisposable)?.Dispose();
-            (models.Embedder as IDisposable)?.Dispose();
-        }
+        lock (_poolGate) _pool?.Retire();
         GC.SuppressFinalize(this);
     }
 }

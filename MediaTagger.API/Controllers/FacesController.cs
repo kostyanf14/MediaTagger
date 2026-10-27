@@ -16,10 +16,12 @@ public class FacesController : ControllerBase
     private readonly FaceIndexer _indexer;
     private readonly FaceRecognitionService _recognition;
     private readonly ThumbnailService _thumbnails;
+    private readonly FaceAnalyzer _analyzer;
 
     public FacesController(FileSystemService fs, TagsService tags, FaceStore store,
-        FaceIndexer indexer, FaceRecognitionService recognition, ThumbnailService thumbnails)
+        FaceIndexer indexer, FaceRecognitionService recognition, ThumbnailService thumbnails, FaceAnalyzer analyzer)
     {
+        _analyzer = analyzer;
         _thumbnails = thumbnails;
         _fs = fs;
         _tags = tags;
@@ -47,6 +49,23 @@ public class FacesController : ControllerBase
 
     [HttpGet("status")]
     public ActionResult<FaceScanStatus> Status() => Ok(_indexer.Status());
+
+    /// <summary>What the face scan runs on, for the settings. Loads the models if they are not yet.</summary>
+    [HttpGet("device")]
+    public ActionResult<FaceDeviceInfo> Device()
+    {
+        var plan = _analyzer.CurrentPlan();
+        var (usingGpu, gpuError) = _analyzer.Device();
+        return Ok(new FaceDeviceInfo
+        {
+            ProcessorCount = Environment.ProcessorCount,
+            AutoThreads = FaceAnalyzer.AutoThreads(Environment.ProcessorCount),
+            Threads = plan.Threads,
+            GpuSupported = OperatingSystem.IsWindows(),
+            UsingGpu = usingGpu,
+            GpuError = gpuError
+        });
+    }
 
     /// <summary>Photos where a known person seems to appear but is not tagged.</summary>
     [HttpGet("suggestions")]

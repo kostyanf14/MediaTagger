@@ -5,13 +5,31 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>MediaTagger.API</RootNamespace>
   </PropertyGroup>
+  <!--
+    The GPU is reached through DirectML, which exists for Windows only. Anything else
+    (an API on a NAS) gets the plain CPU runtime. A build for an explicit runtime
+    follows that runtime rather than the machine it is built on.
+  -->
+  <PropertyGroup Condition="'$(UseDirectML)' == ''">
+    <UseDirectML Condition="'$(RuntimeIdentifier)' != ''">$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win'))</UseDirectML>
+    <UseDirectML Condition="'$(RuntimeIdentifier)' == ''">$([MSBuild]::IsOSPlatform('Windows'))</UseDirectML>
+  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="FaceAiSharp.Bundle" Version="0.6.35" />
+    <PackageReference Include="FaceAiSharp.Bundle" Version="0.6.25-alpha" />
     <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="15.0.0" />
     <PackageReference Include="MetadataExtractor" Version="2.8.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.26.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" Condition="'$(UseDirectML)' == 'true'" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" Condition="'$(UseDirectML)' != 'true'" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     <PackageReference Include="Xabe.FFmpeg" Version="5.2.6" />
+  </ItemGroup>
+  <!--
+    The DirectML package copies its DLL only for an x64 platform target, and this
+    project is AnyCPU. The copy in System32 is too old for ONNX Runtime, so ship ours.
+  -->
+  <ItemGroup Condition="'$(UseDirectML)' == 'true' And '$(Microsoft_AI_DirectML_Bin_Dir_Windows_x64)' != ''">
+    <Content Include="$(Microsoft_AI_DirectML_Bin_Dir_Windows_x64)\DirectML.dll" Link="DirectML.dll"
+      CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 </Project>

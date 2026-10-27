@@ -10,6 +10,10 @@ public class AppSettings
     public List<string> LibraryFolders { get; set; } = new();
     /// <summary>How the face scan looks at videos.</summary>
     public VideoFaceMode VideoFaces { get; set; } = VideoFaceMode.Frames;
+    /// <summary>CPU threads the face scan may use; 0 picks a share that leaves the machine usable.</summary>
+    public int FaceThreads { get; set; }
+    /// <summary>Find faces on the graphics card (DirectML, Windows only); falls back to the CPU.</summary>
+    public bool FaceGpu { get; set; }
 }
 
 /// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>
@@ -191,6 +195,20 @@ public class FileFace
     /// <summary>Who this might be — someone not tagged on the file yet.</summary>
     public string? Suggestion { get; set; }
     public float Score { get; set; }
+}
+
+public class FaceDeviceInfo
+{
+    public int ProcessorCount { get; set; }
+    /// <summary>Threads used when the setting is left on automatic.</summary>
+    public int AutoThreads { get; set; }
+    /// <summary>Threads in use now.</summary>
+    public int Threads { get; set; }
+    /// <summary>False where there is no DirectML (anything but Windows).</summary>
+    public bool GpuSupported { get; set; }
+    public bool UsingGpu { get; set; }
+    /// <summary>Why the graphics card was asked for but not used.</summary>
+    public string? GpuError { get; set; }
 }
 
 public class FileFacesResponse
