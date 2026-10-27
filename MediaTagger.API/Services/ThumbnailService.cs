@@ -87,9 +87,11 @@ public class ThumbnailService
     /// <summary>
     /// Path to a cached JPEG for <paramref name="filePath"/>, or null when none is needed
     /// or none could be produced. <paramref name="maxSize"/> bounds the longest edge;
-    /// pass 0 for a full-resolution conversion.
+    /// pass 0 for a full-resolution conversion. For a video, <paramref name="at"/> picks the
+    /// frame (seconds in); without it the usual cover frame is used.
     /// </summary>
-    public async Task<string?> GetThumbnailPath(string filePath, int maxSize = 0, CancellationToken cancel = default)
+    public async Task<string?> GetThumbnailPath(string filePath, int maxSize = 0, CancellationToken cancel = default,
+        double? at = null)
     {
         var ext = Path.GetExtension(filePath);
         var isVideo = VideoExtensions.Contains(ext);
@@ -98,15 +100,16 @@ public class ThumbnailService
         // Browser-readable images only need a cache entry when we are downscaling them.
         if (!isVideo && !isHeic && maxSize <= 0) return null;
         if (isVideo && !_ffmpegAvailable) return null;
+        if (!isVideo) at = null;
 
-        var cachePath = GetCachePath(filePath, maxSize);
+        var cachePath = GetCachePath(filePath, maxSize, at);
         if (IsCacheValid(cachePath, filePath)) return cachePath;
 
         // Small previews are cut from the grid-sized one, which the gallery has
         // usually made already and which is a few kilobytes to decode.
         string? basePath = null;
         if (maxSize > 0 && maxSize < BaseSize)
-            basePath = await GetThumbnailPath(filePath, BaseSize, cancel);
+            basePath = await GetThumbnailPath(filePath, BaseSize, cancel, at);
 
         // A tile that scrolled away while waiting gives up its place here, so the
         // ones still on screen are not queued behind it.
@@ -125,6 +128,7 @@ public class ThumbnailService
                 try
                 {
                     if (basePath != null) await Task.Run(() => RenderInProcess(basePath, tempPath, maxSize));
+                    else if (isVideo && at != null) await SnapshotAsync(filePath, tempPath, at.Value, maxSize);
                     else if (isVideo) await ExtractVideoFrameAsync(filePath, tempPath, maxSize);
                     else await RenderImageAsync(filePath, tempPath, maxSize, isHeic);
                 }
@@ -167,13 +171,14 @@ public class ThumbnailService
     /// <summary>
     /// A square JPEG around a face (box relative to the upright picture), for the face
     /// pickers. Big faces are cut from the grid thumbnail, which usually exists already;
-    /// small ones need the detail of a larger rendition.
+    /// small ones need the detail of a larger rendition. A face found in a video is cut
+    /// from the frame it was seen in, <paramref name="at"/> seconds in.
     /// </summary>
     public async Task<byte[]?> GetFaceCropAsync(string filePath, float x, float y, float w, float h, int size,
-        CancellationToken cancel = default)
+        double? at = null, CancellationToken cancel = default)
     {
         var sourceSize = Math.Max(w, h) * BaseSize >= size * 0.75 ? BaseSize : FaceSourceSize;
-        var source = await GetThumbnailPath(filePath, sourceSize, cancel);
+        var source = await GetThumbnailPath(filePath, sourceSize, cancel, at);
         if (source == null) return null;
 
         return await Task.Run(() =>
@@ -196,7 +201,55 @@ public class ThumbnailService
         }, cancel);
     }
 
-    private string GetCachePath(string filePath, int maxSize)
+    /// <summary>
+    /// One frame of a video, <paramref name="seconds"/> in, as JPEG bytes. Not cached:
+    /// face analysis looks at many frames once each, and keeping them would push the
+    /// grid's thumbnails out of the cache.
+    /// </summary>
+    public async Task<byte[]?> GrabVideoFrameAsync(string videoPath, double seconds, int maxSize,
+        CancellationToken cancel = default)
+    {
+        if (!_ffmpegAvailable) return null;
+
+        // Named like any other in-progress file, so a crash mid-grab leaves nothing behind for long.
+        var tempPath = Path.Combine(_cacheDir, "frame." + Guid.NewGuid().ToString("N")[..8] + TempSuffix);
+        try
+        {
+            await _workSlots.WaitAsync(cancel);
+            try { await SnapshotAsync(videoPath, tempPath, seconds, maxSize); }
+            finally { _workSlots.Release(); }
+
+            return HasContent(tempPath) ? await File.ReadAllBytesAsync(tempPath, cancel) : null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not grab frame {Seconds}s of {Path}: {Msg}", seconds, videoPath, Summarize(ex));
+            return null;
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    /// <summary>Length of a video in seconds, or 0 when it cannot be told.</summary>
+    public async Task<double> GetVideoDurationAsync(string videoPath)
+    {
+        if (!_ffmpegAvailable) return 0;
+        try
+        {
+            var mediaInfo = await FFmpeg.GetMediaInfo(videoPath);
+            return Math.Max(0, mediaInfo.Duration.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not probe {Path}: {Msg}", videoPath, ex.Message);
+            return 0;
+        }
+    }
+
+    private string GetCachePath(string filePath, int maxSize, double? at = null)
     {
         var normalized = filePath;
         try { normalized = Path.GetFullPath(filePath); } catch { /* keep the raw path */ }
@@ -204,9 +257,13 @@ public class ThumbnailService
 
         var cacheKey = Convert.ToHexString(
             System.Security.Cryptography.MD5.HashData(
-                System.Text.Encoding.UTF8.GetBytes(normalized + "|" + maxSize)));
+                System.Text.Encoding.UTF8.GetBytes(normalized + "|" + maxSize + FrameKey(at))));
         return Path.Combine(_cacheDir, cacheKey + ".jpg");
     }
+
+    /// <summary>Millisecond precision; the cover frame keeps the key it always had.</summary>
+    private static string FrameKey(double? at) =>
+        at == null ? "" : "|t" + Math.Round(at.Value * 1000).ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
     /// FFmpeg attaches its whole version banner and input dump to every error. Keep the
@@ -404,19 +461,10 @@ public class ThumbnailService
 
     private async Task<double> GetSeekPositionAsync(string videoPath)
     {
-        try
-        {
-            var mediaInfo = await FFmpeg.GetMediaInfo(videoPath);
-            var duration = mediaInfo.Duration.TotalSeconds;
-            if (duration <= 0) return 0;
-            // 10% in, but never past the last half second of the clip.
-            return Math.Clamp(duration * 0.1, 0, Math.Max(0, duration - 0.5));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug("Could not probe {Path}, seeking to first frame: {Msg}", videoPath, ex.Message);
-            return 0;
-        }
+        var duration = await GetVideoDurationAsync(videoPath);
+        if (duration <= 0) return 0;
+        // 10% in, but never past the last half second of the clip.
+        return Math.Clamp(duration * 0.1, 0, Math.Max(0, duration - 0.5));
     }
 
     /// <summary>Removes half-written files left behind by a crash or a killed process.</summary>

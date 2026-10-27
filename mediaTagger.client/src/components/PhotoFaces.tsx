@@ -77,7 +77,9 @@ export function PhotoFaces({ roots, file, people, allPeople, onAddPerson }: Prop
 
   return (
     <Box>
-      <Typography variant="caption" color="text.secondary">Обличчя на фото</Typography>
+      <Typography variant="caption" color="text.secondary">
+        {file.type === 'video' ? 'Обличчя у відео' : 'Обличчя на фото'}
+      </Typography>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
         {faces.map(face => (
           <Box key={face.faceId} sx={{ width: 68, textAlign: 'center' }}>

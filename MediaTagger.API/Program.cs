@@ -6,6 +6,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<CacheLocator>();
+builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddSingleton<ExifCache>();
 builder.Services.AddSingleton<TagsService>();

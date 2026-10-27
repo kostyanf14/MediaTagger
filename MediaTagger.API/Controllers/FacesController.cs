@@ -73,14 +73,15 @@ public class FacesController : ControllerBase
         return Ok(await _recognition.GetFileFacesAsync(roots, file));
     }
 
-    /// <summary>A square picture of one face, cut from the file's thumbnail.</summary>
+    /// <summary>A square picture of one face, cut from the file's thumbnail — or for a video, from frame <paramref name="t"/>.</summary>
     [HttpGet("crop")]
     public async Task<IActionResult> Crop([FromQuery] string filePath, [FromQuery] float x, [FromQuery] float y,
-        [FromQuery] float w, [FromQuery] float h, [FromQuery] int size = 96, CancellationToken cancel = default)
+        [FromQuery] float w, [FromQuery] float h, [FromQuery] int size = 96, [FromQuery] double? t = null,
+        CancellationToken cancel = default)
     {
         if (!System.IO.File.Exists(filePath)) return NotFound();
         byte[]? bytes;
-        try { bytes = await _thumbnails.GetFaceCropAsync(filePath, x, y, w, h, Math.Clamp(size, 32, 512), cancel); }
+        try { bytes = await _thumbnails.GetFaceCropAsync(filePath, x, y, w, h, Math.Clamp(size, 32, 512), t, cancel); }
         catch (OperationCanceledException) { return new EmptyResult(); }
         if (bytes == null) return NotFound();
 

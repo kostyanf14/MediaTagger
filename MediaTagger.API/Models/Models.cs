@@ -1,4 +1,30 @@
+using System.Text.Json.Serialization;
+
 namespace MediaTagger.API.Models;
+
+public class AppSettings
+{
+    public string DefaultFolder { get; set; } = "";
+    public List<string> RecentFolders { get; set; } = new();
+    /// <summary>Photo folders indexed together. Faces, places and the library counts share one database.</summary>
+    public List<string> LibraryFolders { get; set; } = new();
+    /// <summary>How the face scan looks at videos.</summary>
+    public VideoFaceMode VideoFaces { get; set; } = VideoFaceMode.Frames;
+}
+
+/// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<VideoFaceMode>))]
+public enum VideoFaceMode
+{
+    /// <summary>Videos are skipped; whatever was found in them before is kept.</summary>
+    Off,
+    /// <summary>Only the cover frame the grid shows.</summary>
+    Cover,
+    /// <summary>A frame every couple of seconds across the whole clip.</summary>
+    Frames,
+    /// <summary>A frame every second, for more angles of each person; slower.</summary>
+    Detailed
+}
 
 public class MediaFile
 {
@@ -118,6 +144,8 @@ public class FaceSuggestion
     public float Y { get; set; }
     public float W { get; set; }
     public float H { get; set; }
+    /// <summary>For a video, the frame (seconds in) the box is on; null for a photo.</summary>
+    public double? Time { get; set; }
     /// <summary>Pixel size the box was measured on; the UI needs the aspect ratio to crop square.</summary>
     public int Width { get; set; }
     public int Height { get; set; }
@@ -156,6 +184,8 @@ public class FileFace
     public float Y { get; set; }
     public float W { get; set; }
     public float H { get; set; }
+    /// <summary>For a video, the frame (seconds in) the box is on; null for a photo.</summary>
+    public double? Time { get; set; }
     /// <summary>Who this is, when the tags (or the user) settled it.</summary>
     public string? Person { get; set; }
     /// <summary>Who this might be — someone not tagged on the file yet.</summary>

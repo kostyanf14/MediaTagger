@@ -1,11 +1,11 @@
 import { Avatar, SxProps, Theme } from '@mui/material'
 import FaceIcon from '@mui/icons-material/Face'
-import { facesApi } from '../api/client'
+import { facesApi, FaceBox } from '../api/client'
 
 interface Props {
   filePath: string
-  /** Face box relative (0..1) to the upright picture. */
-  box: { x: number; y: number; w: number; h: number }
+  /** Face box relative (0..1) to the upright picture; a video's also names its frame. */
+  box: FaceBox
   size?: number
   variant?: 'circular' | 'rounded' | 'square'
   sx?: SxProps<Theme>
