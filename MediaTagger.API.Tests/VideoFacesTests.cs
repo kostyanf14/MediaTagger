@@ -1,3 +1,4 @@
+using MediaTagger.API.Models;
 using MediaTagger.API.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
@@ -92,13 +93,16 @@ public class VideoFacesTests
     [Fact]
     public void Frames_cover_the_whole_clip()
     {
-        var times = FaceAnalyzer.SampleTimes(60);
+        var times = FaceAnalyzer.SampleTimes(60, VideoFaceMode.Frames);
         Assert.Equal(16, times.Length);
         Assert.True(times[0] < 3);
         Assert.True(times[^1] > 55 && times[^1] <= 59.5);
 
-        Assert.Equal(3, FaceAnalyzer.SampleTimes(1.5).Length);
-        Assert.Equal(new[] { 0.0 }, FaceAnalyzer.SampleTimes(0));
+        Assert.Equal(10, FaceAnalyzer.SampleTimes(20, VideoFaceMode.Frames).Length);
+        Assert.Equal(20, FaceAnalyzer.SampleTimes(20, VideoFaceMode.Detailed).Length);
+        Assert.Equal(48, FaceAnalyzer.SampleTimes(600, VideoFaceMode.Detailed).Length);
+        Assert.Equal(3, FaceAnalyzer.SampleTimes(1.5, VideoFaceMode.Frames).Length);
+        Assert.Equal(new[] { 0.0 }, FaceAnalyzer.SampleTimes(0, VideoFaceMode.Frames));
     }
 
     [Fact]

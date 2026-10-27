@@ -18,11 +18,14 @@ public class FaceIndexer : BackgroundService
     private readonly FileSystemService _fs;
     private readonly FaceStore _store;
     private readonly FaceAnalyzer _analyzer;
+    private readonly SettingsService _settings;
     private readonly ILogger<FaceIndexer> _logger;
 
     private readonly SemaphoreSlim _wake = new(0);
     private readonly object _gate = new();
     private string[]? _requestedRoots;
+    // What the last pass covered, so a change of video mode can redo it.
+    private string[]? _lastRoots;
     private string _scope = "";
     private CancellationTokenSource? _current;
 
@@ -34,12 +37,18 @@ public class FaceIndexer : BackgroundService
     private long _processed;
     private long _total;
 
-    public FaceIndexer(FileSystemService fs, FaceStore store, FaceAnalyzer analyzer, ILogger<FaceIndexer> logger)
+    public FaceIndexer(FileSystemService fs, FaceStore store, FaceAnalyzer analyzer, SettingsService settings,
+        ILogger<FaceIndexer> logger)
     {
         _fs = fs;
         _store = store;
         _analyzer = analyzer;
+        _settings = settings;
         _logger = logger;
+        _settings.Changed += (before, after) =>
+        {
+            if (before.VideoFaces != after.VideoFaces) Rescan();
+        };
     }
 
     public bool IsActive => Volatile.Read(ref _active);
@@ -61,7 +70,19 @@ public class FaceIndexer : BackgroundService
         {
             // Asking again for the library already being scanned changes nothing.
             if (IsActive && _scope == scope) return;
-            _requestedRoots = roots.ToArray();
+            _requestedRoots = _lastRoots = roots.ToArray();
+            _current?.Cancel();
+        }
+        _wake.Release();
+    }
+
+    /// <summary>Starts the last pass over again, even if it is still running, so it picks up a new video mode.</summary>
+    private void Rescan()
+    {
+        lock (_gate)
+        {
+            if (_lastRoots == null) return;
+            _requestedRoots = _lastRoots;
             _current?.Cancel();
         }
         _wake.Release();
@@ -71,7 +92,7 @@ public class FaceIndexer : BackgroundService
     {
         lock (_gate)
         {
-            _requestedRoots = null;
+            _requestedRoots = _lastRoots = null;
             _current?.Cancel();
         }
     }
@@ -84,26 +105,28 @@ public class FaceIndexer : BackgroundService
     {
         var mtime = MtimeOf(file);
         var known = _store.TryGet(file.FilePath, file.Size, mtime);
-        // An answer from an older method still beats none when there is no way to redo it.
-        if ((known != null && IsCurrent(known, file)) || !_analyzer.Available)
+        var mode = _settings.VideoFaces;
+        // An answer from a lesser method still beats none when it is not to be redone.
+        if ((known != null && IsCurrent(known, file, mode)) || !_analyzer.Available || IsSkipped(file, mode))
             return Task.FromResult(known);
 
-        return _inFlight.GetOrAdd(file.FilePath, _ => AnalyzeAndForget(file, mtime, cancel));
+        return _inFlight.GetOrAdd(file.FilePath, _ => AnalyzeAndForget(file, mtime, mode, cancel));
     }
 
-    private async Task<StoredFileFaces?> AnalyzeAndForget(MediaFile file, long mtime, CancellationToken cancel)
+    private async Task<StoredFileFaces?> AnalyzeAndForget(MediaFile file, long mtime, VideoFaceMode mode, CancellationToken cancel)
     {
+        var method = FaceAnalyzer.MethodFor(file.Type == "video", mode);
         try
         {
-            var result = await _analyzer.AnalyzeAsync(file.FilePath, file.Type == "video", cancel);
-            return _store.Save(file.FilePath, file.Size, mtime, MethodOf(file), result.Width, result.Height, result.Faces);
+            var result = await _analyzer.AnalyzeAsync(file.FilePath, file.Type == "video", mode, cancel);
+            return _store.Save(file.FilePath, file.Size, mtime, method, result.Width, result.Height, result.Faces);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             // Remembered as "no faces" so a file that cannot be read is not retried on every pass.
             _logger.LogDebug("Face analysis failed for {Path}: {Msg}", file.FilePath, ex.Message);
-            return _store.Save(file.FilePath, file.Size, mtime, MethodOf(file), 0, 0, Array.Empty<DetectedFace>());
+            return _store.Save(file.FilePath, file.Size, mtime, method, 0, 0, Array.Empty<DetectedFace>());
         }
         finally
         {
@@ -114,10 +137,15 @@ public class FaceIndexer : BackgroundService
     /// <summary>Matches the timestamp form the store keys versions on.</summary>
     public static long MtimeOf(MediaFile file) => file.Modified.ToUniversalTime().Ticks;
 
-    private static int MethodOf(MediaFile file) => FaceAnalyzer.MethodFor(file.Type == "video");
+    /// <summary>
+    /// True when the file was analysed at least as thoroughly as the mode asks. Switching
+    /// to a lighter mode keeps the better results instead of redoing them worse.
+    /// </summary>
+    private static bool IsCurrent(StoredFileFaces known, MediaFile file, VideoFaceMode mode) =>
+        known.Method >= FaceAnalyzer.MethodFor(file.Type == "video", mode);
 
-    /// <summary>False for a file analysed the way this version no longer does it.</summary>
-    private static bool IsCurrent(StoredFileFaces known, MediaFile file) => known.Method >= MethodOf(file);
+    private static bool IsSkipped(MediaFile file, VideoFaceMode mode) =>
+        file.Type == "video" && mode == VideoFaceMode.Off;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
     {
@@ -149,11 +177,13 @@ public class FaceIndexer : BackgroundService
 
         // Listing goes through the library index, which is usually warm already.
         var files = await Task.Run(() => _fs.Across(roots), cancel);
+        var mode = _settings.VideoFaces;
 
         // Photos someone is already tagged on go first — they are what the model
         // learns from, so suggestions get useful long before the scan finishes.
         var pending = files
-            .Where(f => _store.TryGet(f.FilePath, f.Size, MtimeOf(f)) is not { } known || !IsCurrent(known, f))
+            .Where(f => !IsSkipped(f, mode))
+            .Where(f => _store.TryGet(f.FilePath, f.Size, MtimeOf(f)) is not { } known || !IsCurrent(known, f, mode))
             .OrderByDescending(f => f.Tags.People.Count > 0)
             .ThenBy(f => f.Type == "video")
             .ThenByDescending(f => f.Tags.DateTaken ?? f.Modified)

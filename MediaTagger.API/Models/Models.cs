@@ -1,4 +1,30 @@
+using System.Text.Json.Serialization;
+
 namespace MediaTagger.API.Models;
+
+public class AppSettings
+{
+    public string DefaultFolder { get; set; } = "";
+    public List<string> RecentFolders { get; set; } = new();
+    /// <summary>Photo folders indexed together. Faces, places and the library counts share one database.</summary>
+    public List<string> LibraryFolders { get; set; } = new();
+    /// <summary>How the face scan looks at videos.</summary>
+    public VideoFaceMode VideoFaces { get; set; } = VideoFaceMode.Frames;
+}
+
+/// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<VideoFaceMode>))]
+public enum VideoFaceMode
+{
+    /// <summary>Videos are skipped; whatever was found in them before is kept.</summary>
+    Off,
+    /// <summary>Only the cover frame the grid shows.</summary>
+    Cover,
+    /// <summary>A frame every couple of seconds across the whole clip.</summary>
+    Frames,
+    /// <summary>A frame every second, for more angles of each person; slower.</summary>
+    Detailed
+}
 
 public class MediaFile
 {

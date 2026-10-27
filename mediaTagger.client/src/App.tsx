@@ -14,6 +14,7 @@ import HistoryIcon from '@mui/icons-material/History'
 import CollectionsIcon from '@mui/icons-material/Collections'
 import FaceIcon from '@mui/icons-material/Face'
 import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
+import SettingsIcon from '@mui/icons-material/Settings'
 import { FolderTreeNode } from './components/FolderTree'
 import { MediaGallery } from './components/MediaGallery'
 import { TagsSidePanel } from './components/TagsSidePanel'
@@ -23,6 +24,7 @@ import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
+import { SettingsDialog } from './components/SettingsDialog'
 import {
   mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest,
@@ -100,6 +102,7 @@ export default function App() {
   const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map 3=faces 4=places
   const [isSearching, setIsSearching] = useState(false)
   const [recentAnchor, setRecentAnchor] = useState<null | HTMLElement>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // Browsing a folder includes everything below it unless the user says otherwise.
   const [recursive, setRecursive] = useState(true)
   const [scan, setScan] = useState<ScanProgress | null>(null)
@@ -489,6 +492,11 @@ export default function App() {
           <Box sx={{ p: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
             <PhotoLibraryIcon sx={{ color: 'primary.main', fontSize: 20 }} />
             <Typography variant="subtitle2" fontWeight={700} sx={{ flex: 1 }}>MediaTagger</Typography>
+            <Tooltip title="Налаштування">
+              <IconButton size="small" onClick={() => setSettingsOpen(true)} sx={{ color: 'text.secondary' }}>
+                <SettingsIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
 
           <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -707,6 +715,9 @@ export default function App() {
         onNavigate={setLightboxFile}
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
       />
+
+      <SettingsDialog open={settingsOpen} settings={settings}
+        onChange={saveSettings} onClose={() => setSettingsOpen(false)} />
     </ThemeProvider>
   )
 }

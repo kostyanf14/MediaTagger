@@ -128,7 +128,12 @@ export interface LibraryStats {
   albums: AlbumStat[]; people: PersonStat[]
   places: PlaceStat[]; groups: GroupStat[]
 }
-export interface AppSettings { defaultFolder: string; recentFolders: string[]; libraryFolders?: string[] }
+/** How the face scan looks at videos: skip them, cover frame only, frames across the clip, or more of them. */
+export type VideoFaceMode = 'Off' | 'Cover' | 'Frames' | 'Detailed'
+export interface AppSettings {
+  defaultFolder: string; recentFolders: string[]; libraryFolders?: string[]
+  videoFaces?: VideoFaceMode
+}
 export interface ScanProgress {
   active: boolean
   processed: number

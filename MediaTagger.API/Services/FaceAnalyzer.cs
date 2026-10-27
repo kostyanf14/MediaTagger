@@ -1,5 +1,6 @@
 using FaceAiSharp;
 using ImageMagick;
+using MediaTagger.API.Models;
 using SessionOptions = Microsoft.ML.OnnxRuntime.SessionOptions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -21,17 +22,26 @@ public class FaceAnalyzer : IDisposable
     /// <summary>Faces smaller than this (px, at analysis size) give embeddings too noisy to trust.</summary>
     private const float MinFaceSide = 36;
     private const float MinConfidence = 0.6f;
-    /// <summary>A video is looked at every this many seconds, so someone who shows up halfway is seen too.</summary>
-    private const double FrameSpacing = 2;
     private const int MinFrames = 3;
-    /// <summary>Caps the work on long videos; the frames then simply spread further apart.</summary>
-    private const int MaxFrames = 16;
 
     /// <summary>
-    /// How a file was analysed. Files stored with an older method are analysed again:
-    /// videos used to be judged by their cover frame alone, now by frames from end to end.
+    /// How a file was analysed; a higher number saw more of it. A video stored with a
+    /// lower method than the chosen mode is analysed again. Cover-frame analysis is 1,
+    /// the same as every video stored before modes existed.
     /// </summary>
-    public static int MethodFor(bool isVideo) => isVideo ? 2 : 1;
+    public static int MethodFor(bool isVideo, VideoFaceMode mode) => !isVideo ? 1 : mode switch
+    {
+        VideoFaceMode.Detailed => 3,
+        VideoFaceMode.Frames => 2,
+        _ => 1
+    };
+
+    /// <summary>
+    /// Seconds between frames, so someone who shows up halfway is seen too, and a cap on
+    /// frames per video; on long videos the frames simply spread further apart.
+    /// </summary>
+    private static (double Spacing, int MaxFrames) Sampling(VideoFaceMode mode) =>
+        mode == VideoFaceMode.Detailed ? (1, 48) : (2, 16);
 
     private readonly ThumbnailService _thumbnails;
     private readonly ILogger<FaceAnalyzer> _logger;
@@ -54,12 +64,12 @@ public class FaceAnalyzer : IDisposable
     public sealed record Result(int Width, int Height, List<DetectedFace> Faces);
 
     /// <summary>Faces in the file, or an empty result when it cannot be read at all.</summary>
-    public async Task<Result> AnalyzeAsync(string filePath, bool isVideo, CancellationToken cancel)
+    public async Task<Result> AnalyzeAsync(string filePath, bool isVideo, VideoFaceMode mode, CancellationToken cancel)
     {
         var models = _models.Value ?? throw new InvalidOperationException("Face models are not available");
-        if (isVideo)
+        if (isVideo && mode is VideoFaceMode.Frames or VideoFaceMode.Detailed)
         {
-            var video = await AnalyzeVideoAsync(models, filePath, cancel);
+            var video = await AnalyzeVideoAsync(models, filePath, mode, cancel);
             if (video != null) return video;
         }
 
@@ -74,14 +84,14 @@ public class FaceAnalyzer : IDisposable
     /// the cover frame the grid shows.
     /// </summary>
     private async Task<Result?> AnalyzeVideoAsync((IFaceDetectorWithLandmarks Detector, IFaceEmbeddingsGenerator Embedder) models,
-        string filePath, CancellationToken cancel)
+        string filePath, VideoFaceMode mode, CancellationToken cancel)
     {
         var duration = await _thumbnails.GetVideoDurationAsync(filePath);
         if (duration <= 0) return null;
 
         var frames = new List<IReadOnlyList<DetectedFace>>();
         int width = 0, height = 0;
-        foreach (var seconds in SampleTimes(duration))
+        foreach (var seconds in SampleTimes(duration, mode))
         {
             cancel.ThrowIfCancellationRequested();
             var jpeg = await _thumbnails.GrabVideoFrameAsync(filePath, seconds, AnalysisSize, cancel);
@@ -105,10 +115,11 @@ public class FaceAnalyzer : IDisposable
     }
 
     /// <summary>Seconds into a clip of <paramref name="duration"/> to look at, evenly spaced, clear of the very end.</summary>
-    public static double[] SampleTimes(double duration)
+    public static double[] SampleTimes(double duration, VideoFaceMode mode)
     {
         if (duration <= 0) return new[] { 0.0 };
-        var count = Math.Clamp((int)Math.Ceiling(duration / FrameSpacing), MinFrames, MaxFrames);
+        var (spacing, maxFrames) = Sampling(mode);
+        var count = Math.Clamp((int)Math.Ceiling(duration / spacing), MinFrames, maxFrames);
         // Some containers cannot seek right up to the duration they report.
         var last = Math.Max(0, duration - 0.5);
         return Enumerable.Range(0, count)
