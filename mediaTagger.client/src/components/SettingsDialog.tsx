@@ -79,6 +79,24 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
 
         <Divider sx={{ my: 2 }} />
 
+        <Typography variant="subtitle2">Перегляд</Typography>
+        <FormControlLabel sx={{ mt: 1, alignItems: 'flex-start', '& .MuiSwitch-root': { mt: -0.5 } }}
+          control={
+            <Switch size="small" checked={!!settings.closeViewerOnOutsideClick}
+              onChange={e => save({ closeViewerOnOutsideClick: e.target.checked })} />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">Закривати клацанням поза фото</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4}>
+                Клацання на темне тло навколо фото чи відео закриває перегляд. Клацання по самому фото,
+                кнопках і стрічці мініатюр, як і перетягування збільшеного фото, його не закривають.
+              </Typography>
+            </Box>
+          } />
+
+        <Divider sx={{ my: 2 }} />
+
         <Typography variant="subtitle2" gutterBottom>Обличчя у відео</Typography>
         <RadioGroup value={videoFaces}
           onChange={e => save({ videoFaces: e.target.value as VideoFaceMode })}>

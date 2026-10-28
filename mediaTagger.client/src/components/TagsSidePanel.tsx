@@ -11,6 +11,7 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import MapIcon from '@mui/icons-material/Map'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ContentPasteIcon from '@mui/icons-material/ContentPaste'
+import DeleteIcon from '@mui/icons-material/DeleteOutline'
 import { MediaFile, FileTags, Coordinates, BulkTagsRequest, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { CoordinatePicker } from './CoordinatePicker'
 import { Thumbnail } from './Thumbnail'
@@ -37,6 +38,8 @@ interface Props {
   roots: string[]
   /** Filled in on a photo that never had a photographer set; blank fills in nobody. */
   defaultPhotographer: string
+  /** Asks to delete these files from disk; the confirmation is the app's. */
+  onDelete: (files: MediaFile[]) => void
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -115,7 +118,9 @@ function PeopleField({ value, options, onChange, copied, onCopy }: {
   )
 }
 
-export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, roots, defaultPhotographer }: Props) {
+export function TagsSidePanel({
+  selection, onClose, onSaved, onAutoSaved, allTags, roots, defaultPhotographer, onDelete
+}: Props) {
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
   const { revealInExplorer, openFile } = useElectron()
@@ -423,6 +428,10 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
             >
               {saving ? 'Застосування...' : `Додати теги до ${selection.length} файлів`}
             </Button>
+            <Button fullWidth color="error" size="small" startIcon={<DeleteIcon />} sx={{ mt: 1 }}
+              onClick={() => onDelete(selection)} disabled={saving}>
+              Видалити {selection.length} файлів з диска
+            </Button>
           </Box>
         </>
       )}
@@ -442,6 +451,11 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
             <Tooltip title="Відкрити файл">
               <IconButton size="small" onClick={() => openFile(file.filePath)}>
                 <OpenInNewIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Видалити з диска (Delete)">
+              <IconButton size="small" onClick={() => onDelete([file])}>
+                <DeleteIcon fontSize="small" />
               </IconButton>
             </Tooltip>
             <IconButton size="small" onClick={onClose}>

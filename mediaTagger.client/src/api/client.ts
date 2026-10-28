@@ -144,6 +144,8 @@ export interface AppSettings {
   faceGpu?: boolean
   /** Offered as the photographer on photos that never had one set. */
   defaultPhotographer?: string
+  /** A click beside the picture closes the viewer. */
+  closeViewerOnOutsideClick?: boolean
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {
@@ -250,6 +252,9 @@ export const mediaApi = {
     api.get<boolean>('/media/folder-exists', { params: { folderPath } }),
   deleteFile: (filePath: string) =>
     api.delete('/media/file', { params: { filePath } }),
+  // How many of these a delete would remove for good instead of moving to the recycle bin.
+  deleteCheck: (filePaths: string[]) =>
+    api.post<number>('/media/delete-check', filePaths),
   search: (req: SearchRequest) =>
     api.post<MediaFile[]>('/media/search', req),
   getAllTags: (roots: string | string[]) =>

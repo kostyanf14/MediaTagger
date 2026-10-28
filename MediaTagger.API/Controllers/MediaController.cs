@@ -79,6 +79,31 @@ public class MediaController : ControllerBase
         catch (Exception ex) { return StatusCode(500, ex.Message); }
     }
 
+    /// <summary>
+    /// How many of these files a delete would remove for good rather than move to the
+    /// recycle bin, so the confirmation can say so before anything is lost.
+    /// </summary>
+    [HttpPost("delete-check")]
+    public ActionResult<int> DeleteCheck([FromBody] List<string> filePaths)
+        => Ok(filePaths.Count(p => !GoesToTrash(p)));
+
+    /// <summary>
+    /// Windows has no recycle bin on network drives and deletes there for good; Linux
+    /// (a NAS) has none that a server process can use.
+    /// </summary>
+    private static bool GoesToTrash(string filePath)
+    {
+        if (OperatingSystem.IsMacOS()) return true;
+        if (!OperatingSystem.IsWindows()) return false;
+        if (filePath.StartsWith(@"\\") || filePath.StartsWith("//")) return false;
+        try
+        {
+            var root = Path.GetPathRoot(filePath);
+            return !string.IsNullOrEmpty(root) && new DriveInfo(root).DriveType != DriveType.Network;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException) { return false; }
+    }
+
     private static void SendToTrash(string filePath)
     {
         if (OperatingSystem.IsWindows())

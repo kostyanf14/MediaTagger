@@ -22,6 +22,7 @@ import { SearchBar } from './components/SearchBar'
 import { MapView } from './components/MapView'
 import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
+import { DeleteFilesDialog } from './components/DeleteFilesDialog'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -97,6 +98,8 @@ export default function App() {
   const [files, setFiles] = useState<MediaFile[]>([])
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
+  // Files waiting for the delete confirmation, from wherever it was asked for.
+  const [deleteRequest, setDeleteRequest] = useState<MediaFile[] | null>(null)
   const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [], places: [] })
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [tab, setTab] = useState(0) // 0=gallery 1=library 2=map 3=faces 4=places
@@ -331,15 +334,35 @@ export default function App() {
     if (path) addRoot(path)
   }
 
-  const handleDelete = async (file: MediaFile) => {
-    await mediaApi.deleteFile(file.filePath)
-    setSelectedPaths(prev => prev.filter(p => p !== file.filePath))
-    if (lightboxFile?.filePath === file.filePath) setLightboxFile(null)
-    // Drop it from the list directly — re-reading the folder would blank the grid.
-    setFiles(prev => prev.filter(f => f.filePath !== file.filePath))
+  const handleDeleted = (paths: string[], complete: boolean) => {
+    const gone = new Set(paths)
+    // The viewer moves on to the next picture, as if the deleted one were never there.
+    if (lightboxFile && gone.has(lightboxFile.filePath)) {
+      const at = orderedFiles.findIndex(f => f.filePath === lightboxFile.filePath)
+      const next = orderedFiles.slice(at + 1).find(f => !gone.has(f.filePath))
+        ?? orderedFiles.slice(0, at).reverse().find(f => !gone.has(f.filePath))
+      setLightboxFile(next ?? null)
+    }
+    setSelectedPaths(prev => prev.filter(p => !gone.has(p)))
+    // Drop them from the list directly — re-reading the folder would blank the grid.
+    setFiles(prev => prev.filter(f => !gone.has(f.filePath)))
+    if (complete) setDeleteRequest(null)
     loadAllTags(libraryRoots)
     markTagsChanged()
   }
+
+  // Delete in the gallery asks to delete whatever is selected. The viewer handles its
+  // own Delete, and a key pressed while typing belongs to the field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' || tab !== 0 || lightboxFile || settingsOpen || deleteRequest) return
+      const target = e.target as HTMLElement | null
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return
+      if (selection.length) setDeleteRequest(selection)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tab, lightboxFile, settingsOpen, deleteRequest, selection])
 
   // Called from map lightbox "show in app" button
   const handleShowInApp = useCallback((file: MediaFile) => {
@@ -672,7 +695,7 @@ export default function App() {
                   selectedPaths={selectedPaths}
                   onSelectionChange={setSelectedPaths}
                   onDoubleClick={setLightboxFile}
-                  onDelete={handleDelete}
+                  onDelete={file => setDeleteRequest([file])}
                 />
               </Box>
 
@@ -685,7 +708,8 @@ export default function App() {
               {/* Map — always mounted, hidden when not active — preserves zoom/pan state */}
               <Box sx={{ display: tab === 2 ? 'block' : 'none', height: '100%' }}>
                 <MapView roots={mapRoots}
-                  refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp} />
+                  refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp}
+                  closeViewerOnOutsideClick={!!settings.closeViewerOnOutsideClick} />
               </Box>
 
               {/* Faces — suggestions learned from the people already tagged */}
@@ -709,6 +733,7 @@ export default function App() {
               allTags={allTags}
               roots={libraryRoots}
               defaultPhotographer={settings.defaultPhotographer ?? ''}
+              onDelete={setDeleteRequest}
             />
           </Box>
         </Box>
@@ -721,7 +746,12 @@ export default function App() {
         onClose={() => setLightboxFile(null)}
         onNavigate={setLightboxFile}
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
+        onDelete={f => setDeleteRequest([f])}
+        closeOnOutsideClick={!!settings.closeViewerOnOutsideClick}
+        paused={!!deleteRequest}
       />
+
+      <DeleteFilesDialog files={deleteRequest} onCancel={() => setDeleteRequest(null)} onDeleted={handleDeleted} />
 
       <SettingsDialog open={settingsOpen} settings={settings} people={allTags.people}
         onChange={saveSettings} onClose={() => setSettingsOpen(false)} />

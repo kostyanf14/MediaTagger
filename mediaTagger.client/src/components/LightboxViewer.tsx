@@ -16,6 +16,7 @@ import ZoomOutIcon from '@mui/icons-material/ZoomOut'
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -37,9 +38,32 @@ interface Props {
   contextLabel?: string
   // Navigate to file in gallery tab
   onShowInApp?: (file: MediaFile) => void
+  /** Asks to delete the file from disk; left out where the viewer cannot follow a delete. */
+  onDelete?: (file: MediaFile) => void
+  /** A click beside the picture closes the viewer. */
+  closeOnOutsideClick?: boolean
+  /** A dialog is open on top; the keys are its, not the viewer's. */
+  paused?: boolean
 }
 
-export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp }: Props) {
+// Further than this between press and release is a drag (a pan), not a click.
+const CLICK_SLOP_PX = 5
+
+/** Where an <img> with object-fit: contain actually draws, inside its own box. */
+function pictureRect(img: HTMLImageElement) {
+  const box = img.getBoundingClientRect()
+  if (!img.naturalWidth || !img.naturalHeight) return box
+  const scale = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight)
+  const width = img.naturalWidth * scale
+  const height = img.naturalHeight * scale
+  const left = box.left + (box.width - width) / 2
+  const top = box.top + (box.height - height) / 2
+  return { left, top, right: left + width, bottom: top + height }
+}
+
+export function LightboxViewer({
+  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, closeOnOutsideClick, paused
+}: Props) {
   const { revealInExplorer, openFile, isElectron } = useElectron()
   // Set when the <video> element gives up on the file's codec.
   const [videoError, setVideoError] = useState(false)
@@ -50,7 +74,10 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
   // Held so the browser does not drop the neighbours' downloads half-way.
   const preloaded = useRef<HTMLImageElement[]>([])
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const mediaRef = useRef<HTMLDivElement | null>(null)
   const panStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
+  // Where the last press went down, to tell a click from the end of a pan.
+  const pressedAt = useRef<{ x: number; y: number } | null>(null)
   const currentIndex = file ? files.findIndex(f => f.filePath === file.filePath) : -1
 
   // Keeps the picture from being dragged off the stage entirely: the further it is
@@ -139,8 +166,9 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!file) return
+      if (!file || paused) return
       if (e.key === 'Escape') onClose()
+      if (e.key === 'Delete' && onDelete) onDelete(file)
       if (e.key === 'ArrowLeft') goPrev()
       if (e.key === 'ArrowRight') goNext()
       if (e.key === '+' || e.key === '=') zoomBy(ZOOM_STEP)
@@ -149,7 +177,29 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [file, goPrev, goNext, onClose, zoomBy, resetZoom])
+  }, [file, paused, goPrev, goNext, onClose, onDelete, zoomBy, resetZoom])
+
+  /**
+   * With the setting on, a click on the dark area closes the viewer. Clicks on the
+   * picture, the video, the bars and the filmstrip land on their own elements and
+   * are left alone; the photo stage is wider than the photo, so there it is measured.
+   */
+  const handleBackgroundClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation()
+    if (!closeOnOutsideClick) return
+    const target = e.target
+    if (target !== e.currentTarget && target !== mediaRef.current && target !== stageRef.current) return
+    const start = pressedAt.current
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > CLICK_SLOP_PX) return
+    if (target === stageRef.current) {
+      const onPicture = Array.from(stageRef.current.querySelectorAll('img')).some(img => {
+        const r = pictureRect(img)
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+      })
+      if (onPicture) return
+    }
+    onClose()
+  }
 
   if (!file) return null
 
@@ -161,7 +211,8 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
     >
       <Fade in={!!file}>
         <Box
-          onClick={e => e.stopPropagation()}
+          onClick={handleBackgroundClick}
+          onPointerDownCapture={e => { pressedAt.current = { x: e.clientX, y: e.clientY } }}
           sx={{
             position: 'relative', display: 'flex', flexDirection: 'column',
             alignItems: 'center', width: '100vw', height: '100vh'
@@ -270,6 +321,14 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
               </Tooltip>
             )}
 
+            {onDelete && (
+              <Tooltip title="Видалити з диска (Delete)">
+                <IconButton size="small" onClick={() => onDelete(file)} sx={{ color: 'white' }}>
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
             {/* Tags panel */}
             <Tooltip title="Редагувати теги">
               <IconButton size="small" onClick={() => onOpenTags(file)} sx={{ color: 'white' }}>
@@ -283,7 +342,7 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
           </Box>
 
           {/* Media */}
-          <Box sx={{
+          <Box ref={mediaRef} sx={{
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
             width: '100%', pt: 6, pb: 2
           }}>

@@ -2,8 +2,7 @@ import React, { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } 
 import {
   Box, Typography, Chip,
   Skeleton, IconButton, Menu, MenuItem, Select,
-  FormControl, Dialog, Checkbox, FormControlLabel, Tooltip,
-  DialogTitle, DialogContent, DialogActions, Button, Divider
+  FormControl, Checkbox, FormControlLabel, Tooltip, Divider
 } from '@mui/material'
 import { styled } from '@mui/material/styles'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -52,6 +51,7 @@ interface Props {
   selectedPaths: string[]
   onSelectionChange: (paths: string[]) => void
   onDoubleClick: (file: MediaFile) => void
+  /** Asks to delete the file; the confirmation is the app's. */
   onDelete: (file: MediaFile) => void
 }
 
@@ -205,7 +205,6 @@ export function MediaGallery({
   const { startNativeDrag, isElectron, revealInExplorer, openFile } = useElectron()
   const [draggingPath, setDraggingPath] = useState<string | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; file: MediaFile } | null>(null)
-  const [deleteConfirm, setDeleteConfirm] = useState<MediaFile | null>(null)
   // Held in state, not a ref: the scroller only exists once there are files to show,
   // and both the virtualizer and the width observer need to hear about it arriving.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
@@ -299,10 +298,6 @@ export function MediaGallery({
     e.stopPropagation()
     setMenuAnchor({ el: e.currentTarget, file })
   }, [])
-
-  const handleDeleteConfirmed = () => {
-    if (deleteConfirm) { onDelete(deleteConfirm); setDeleteConfirm(null) }
-  }
 
   const renderHeader = (group: FileGroup) => {
     const chosen = group.files.reduce((n, f) => n + (selectedSet.has(f.filePath) ? 1 : 0), 0)
@@ -431,29 +426,14 @@ export function MediaGallery({
         <MenuItem onClick={() => menuAnchor && revealInExplorer?.(menuAnchor.file.filePath)}>
           <FolderOpenIcon fontSize="small" sx={{ mr: 1 }} /> Показати у провіднику
         </MenuItem>
+        {/* The app asks for confirmation; Delete on the keyboard does the same for a selection. */}
         <MenuItem
-          onClick={() => { if (menuAnchor) setDeleteConfirm(menuAnchor.file) }}
+          onClick={() => { if (menuAnchor) onDelete(menuAnchor.file) }}
           sx={{ color: 'error.main' }}
         >
           <DeleteIcon fontSize="small" sx={{ mr: 1 }} /> Видалити
         </MenuItem>
       </Menu>
-
-      {/* Delete confirmation */}
-      <Dialog open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)}>
-        <DialogTitle>Видалити файл?</DialogTitle>
-        <DialogContent>
-          <Typography>
-            <strong>{deleteConfirm?.fileName}</strong> буде переміщено до кошика.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteConfirm(null)}>Скасувати</Button>
-          <Button onClick={handleDeleteConfirmed} color="error" variant="contained">
-            Видалити
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   )
 }
@@ -536,7 +516,7 @@ function SortBar({ sortField, sortDir, onSortField, onSortDir, groupBy, onGroupB
         />
       ) : (
         <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-          Ctrl+клік — кілька, Shift+клік — діапазон
+          Ctrl+клік — кілька, Shift+клік — діапазон, Delete — видалити
         </Typography>
       )}
     </Box>

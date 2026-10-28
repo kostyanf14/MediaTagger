@@ -16,6 +16,8 @@ public class AppSettings
     public bool FaceGpu { get; set; }
     /// <summary>Offered as the photographer on photos that never had one set; blank offers nobody.</summary>
     public string DefaultPhotographer { get; set; } = "";
+    /// <summary>A click beside the picture closes the viewer, not only the close button or Esc.</summary>
+    public bool CloseViewerOnOutsideClick { get; set; }
 }
 
 /// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>

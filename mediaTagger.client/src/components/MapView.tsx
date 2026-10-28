@@ -125,9 +125,11 @@ interface Props {
   /** Only the visible tab refetches. */
   active: boolean
   onShowInApp?: (file: MediaFile) => void
+  /** A click beside the picture closes the viewer. */
+  closeViewerOnOutsideClick?: boolean
 }
 
-export function MapView({ roots, refreshKey, active, onShowInApp }: Props) {
+export function MapView({ roots, refreshKey, active, onShowInApp, closeViewerOnOutsideClick }: Props) {
   const [files, setFiles] = useState<MediaFile[]>([])
   const [loading, setLoading] = useState(false)
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
@@ -266,6 +268,7 @@ export function MapView({ roots, refreshKey, active, onShowInApp }: Props) {
         onOpenTags={() => setLightboxFile(null)}
         onShowInApp={onShowInApp}
         contextLabel={lightboxLabel}
+        closeOnOutsideClick={closeViewerOnOutsideClick}
       />
     </Box>
   )
