@@ -8,8 +8,9 @@ import PeopleIcon from '@mui/icons-material/People'
 import PhotoAlbumIcon from '@mui/icons-material/PhotoAlbum'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import GroupsIcon from '@mui/icons-material/Groups'
-import { mediaApi, facesApi, LibraryStats, SearchRequest, THUMB_SIZE } from '../api/client'
+import { mediaApi, facesApi, LibraryStats, SearchRequest, FaceSuggestion, THUMB_SIZE } from '../api/client'
 import { Thumbnail } from './Thumbnail'
+import { FaceAvatar } from './FaceAvatar'
 
 // Fixed-size squares: covers keep their shape whatever the panel width, and a wide
 // window shows more of them instead of two stretched columns.
@@ -33,6 +34,9 @@ interface Props {
 
 export function LibraryPanel({ roots, refreshKey, active, onFilter, onPeopleRenamed }: Props) {
   const [stats, setStats] = useState<LibraryStats | null>(null)
+  // A recent face per person (lower-cased name), once the face model has one; until
+  // then, or for someone it does not know, the tile shows their latest photo.
+  const [faces, setFaces] = useState<Map<string, FaceSuggestion>>(new Map())
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState(0)
   const [picked, setPicked] = useState<string[]>([])
@@ -57,6 +61,10 @@ export function LibraryPanel({ roots, refreshKey, active, onFilter, onPeopleRena
       // Let a failed load be retried rather than remembered as done.
       .catch(() => { loadedFor.current = null })
       .finally(() => setLoading(false))
+    // Building the face model can take a while; the tiles do not wait for it.
+    facesApi.people(roots)
+      .then(r => setFaces(new Map(r.data.filter(p => p.cover).map(p => [p.name.toLowerCase(), p.cover!]))))
+      .catch(() => {})
   }, [roots, refreshKey, active])
 
   useEffect(() => {
@@ -189,7 +197,10 @@ export function LibraryPanel({ roots, refreshKey, active, onFilter, onPeopleRena
                       }}
                     />
                   )}
-                  {item.coverPath ? (
+                  {current.filterKey === 'people' && faces.has(item.name.toLowerCase()) ? (
+                    <FaceAvatar filePath={faces.get(item.name.toLowerCase())!.filePath}
+                      box={faces.get(item.name.toLowerCase())!} size={TILE_SIZE} variant="square" />
+                  ) : item.coverPath ? (
                     <Thumbnail
                       src={mediaApi.getThumbnailUrl(item.coverPath, THUMB_SIZE)}
                       alt={item.name}

@@ -274,6 +274,9 @@ export const facesApi = {
   device: () => api.get<FaceDeviceInfo>('/faces/device'),
   suggestions: (roots: string | string[], perPerson?: number) =>
     api.get<FaceSuggestionsResponse>('/faces/suggestions', { params: rootQuery(roots, { perPerson }) }),
+  // Who the face model knows, each with a face from their recent photos.
+  people: (roots: string | string[]) =>
+    api.get<LearnedPerson[]>('/faces/people', { params: rootQuery(roots) }),
   file: (roots: string | string[], filePath: string) =>
     api.get<FileFacesResponse>('/faces/file', { params: rootQuery(roots, { filePath }) }),
   // applyTags=false when the caller writes the tags itself (the side panel does).

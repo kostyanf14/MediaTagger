@@ -98,10 +98,13 @@ public class FileSystemService
         var people  = new Dictionary<string, (int Count, string? Cover)>();
         var places  = new Dictionary<string, (int Count, string? Cover)>();
         var groups  = new Dictionary<string, (int Count, string? Cover)>();
+        // A person's cover is their latest photo, so it shows how they look now.
+        var latest  = new Dictionary<string, DateTime>();
 
         foreach (var file in Across(roots))
         {
             var tags = file.Tags;
+            var date = tags.DateTaken ?? file.Modified;
 
             void Add(Dictionary<string, (int, string?)> dict, string key)
             {
@@ -110,7 +113,13 @@ public class FileSystemService
             }
 
             tags.Albums.ForEach(a => Add(albums, a));
-            tags.People.ForEach(p => Add(people, p));
+            foreach (var p in tags.People)
+            {
+                Add(people, p);
+                if (latest.TryGetValue(p, out var seen) && seen >= date) continue;
+                latest[p] = date;
+                people[p] = (people[p].Count, file.FilePath);
+            }
             tags.Groups.ForEach(g => Add(groups, g));
             if (!string.IsNullOrWhiteSpace(tags.Place)) Add(places, tags.Place);
         }

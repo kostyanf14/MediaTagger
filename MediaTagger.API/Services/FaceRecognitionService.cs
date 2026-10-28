@@ -39,6 +39,8 @@ public class FaceRecognitionService
     /// </summary>
     private const float MinDetectionScore = 0.72f;
     private const int AssignRounds = 3;
+    /// <summary>A person's cover is the clearest of their this many most recent faces.</summary>
+    private const int RecentCoverCandidates = 10;
     /// <summary>While the scan is adding faces, a model this fresh is good enough.</summary>
     private static readonly TimeSpan StaleAllowance = TimeSpan.FromSeconds(20);
 
@@ -262,27 +264,32 @@ public class FaceRecognitionService
         return model;
     }
 
-    /// <summary>Who the model knows and from how many faces, each with their clearest face as a cover.</summary>
+    /// <summary>
+    /// Who the model knows and from how many faces, each with a cover from their latest
+    /// photos, so it shows how they look now rather than years ago.
+    /// </summary>
     private static List<LearnedPerson> Summarize(List<Entry> entries, Dictionary<long, string> assigned)
     {
-        var learned = new Dictionary<string, LearnedPerson>(StringComparer.OrdinalIgnoreCase);
-        var coverQuality = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
-            foreach (var face in entry.Faces)
+        return entries
+            .SelectMany(e => e.Faces.Where(f => assigned.ContainsKey(f.Id)).Select(f => (Entry: e, Face: f)))
+            .GroupBy(x => assigned[x.Face.Id], StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
             {
-                if (!assigned.TryGetValue(face.Id, out var person)) continue;
-                if (!learned.TryGetValue(person, out var summary))
-                    learned[person] = summary = new LearnedPerson { Name = person };
-                summary.Faces++;
-
-                // Big, confidently detected faces make the most recognisable covers.
-                var quality = face.Score * face.W * face.H * entry.Width * entry.Height;
-                if (coverQuality.TryGetValue(person, out var current) && current >= quality) continue;
-                coverQuality[person] = quality;
-                summary.Cover = Reference(entry, face);
-            }
-        return learned.Values.OrderByDescending(p => p.Faces).ToList();
+                // Of the latest few, the biggest, most confidently detected face is the most
+                // recognisable; the very latest may be a speck in the back of a group shot.
+                var (entry, face) = g
+                    .OrderByDescending(x => x.Entry.File.Tags.DateTaken ?? x.Entry.File.Modified)
+                    .Take(RecentCoverCandidates)
+                    .MaxBy(x => x.Face.Score * x.Face.W * x.Face.H * x.Entry.Width * x.Entry.Height);
+                return new LearnedPerson { Name = g.Key, Faces = g.Count(), Cover = Reference(entry, face) };
+            })
+            .OrderByDescending(p => p.Faces)
+            .ToList();
     }
+
+    /// <summary>Who the model knows, each with a recent face as a cover.</summary>
+    public async Task<List<LearnedPerson>> GetPeopleAsync(IReadOnlyList<string> roots) =>
+        (await GetModelAsync(roots)).Learned;
 
     private static FaceSuggestion Reference(Entry entry, StoredFace face) => new()
     {

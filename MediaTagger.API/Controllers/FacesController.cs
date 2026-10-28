@@ -77,6 +77,15 @@ public class FacesController : ControllerBase
         return Ok(await _recognition.GetSuggestionsAsync(roots, Math.Clamp(perPerson, 1, 1000)));
     }
 
+    /// <summary>People the face model knows, each with a face from their recent photos.</summary>
+    [HttpGet("people")]
+    public async Task<ActionResult<List<LearnedPerson>>> People([FromQuery] string[] rootPath)
+    {
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        return Ok(await _recognition.GetPeopleAsync(roots));
+    }
+
     /// <summary>Faces in one file, analysed on the spot if the scan has not got to it yet.</summary>
     [HttpGet("file")]
     public async Task<ActionResult<FileFacesResponse>> FileFaces([FromQuery] string[] rootPath, [FromQuery] string filePath)
