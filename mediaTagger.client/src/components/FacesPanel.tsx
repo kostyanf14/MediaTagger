@@ -206,9 +206,12 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
 
+  // By name, not by how many suggestions are left: each answer changes the counts, and
+  // the groups would swap places under the cursor while going through them one by one.
   const people = useMemo(() => (data?.people ?? [])
     .map(p => ({ ...p, items: p.items.filter(i => !decided.has(i.faceId)) }))
-    .filter(p => p.items.length > 0), [data, decided])
+    .filter(p => p.items.length > 0)
+    .sort((a, b) => a.person.localeCompare(b.person, 'uk', { sensitivity: 'base' })), [data, decided])
 
   // The percent is what the tooltip shows, so 80.4% (shown as 80) stays for a manual check.
   const above80 = people.reduce((n, g) => n + g.items.filter(i => Math.round(i.score * 100) > 80).length, 0)
