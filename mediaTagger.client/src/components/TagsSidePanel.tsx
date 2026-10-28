@@ -64,6 +64,11 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
   const [tags, setTags] = useState<FileTags>({
     people: [], place: '', groups: [], albums: [], notes: ''
   })
+  // The place last written (or queued) for this file. It is the place field's
+  // value: left to itself, the Autocomplete would carry the previous photo's pick
+  // over, and choosing that same place here would then look like no change — shown
+  // in the field, never saved.
+  const [savedPlace, setSavedPlace] = useState('')
   const [coordStr, setCoordStr] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [dateTakenStr, setDateTakenStr] = useState('')
@@ -85,6 +90,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
   useEffect(() => {
     if (file) {
       setTags({ ...file.tags })
+      setSavedPlace(file.tags.place)
       setCoordStr(
         file.tags.coordinates
           ? `${file.tags.coordinates.lat}, ${file.tags.coordinates.lng}`
@@ -167,6 +173,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
     if (!file) return
     const next = { ...tags, ...patch }
     setTags(next)
+    setSavedPlace(next.place)
 
     const payload = buildTags(next, coordText)
     pending.current = { path: file.filePath, tags: payload }
@@ -192,6 +199,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
     // The button covers everything, so any chip write still owed is redundant.
     clearTimeout(autoSaveTimer.current)
     pending.current = null
+    setSavedPlace(tags.place)
     try {
       // write() reports the new tags upward, which patches the grid in place. Asking
       // for a folder reload here instead would blank the view and drop the selection,
@@ -432,12 +440,12 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               selectOnFocus
               handleHomeEndKeys
               options={allTags.places}
+              value={savedPlace || null}
               inputValue={tags.place}
-              onInputChange={(_, value, reason) => {
-                // Typing only. Picking an option or clearing arrives via onChange,
-                // which also triggers the save.
-                if (reason === 'input') setTags(t => ({ ...t, place: value }))
-              }}
+              // Typing, picking and clearing all land here so the field never shows
+              // anything but this text. Only onChange saves, and it stays quiet when
+              // the pick is already the saved place — then this is what puts it back.
+              onInputChange={(_, value) => setTags(t => ({ ...t, place: value }))}
               onChange={(_, value) => applyTagChange({ place: typeof value === 'string' ? value : '' })}
               renderInput={(params) => (
                 <TextField {...params} label="Місце" size="small" placeholder="Київ, Хрещатик" />
