@@ -39,6 +39,32 @@ public class PeopleRenameTests
     }
 
     [Fact]
+    public void Rename_also_rewrites_the_photographer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mt-people-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "_tags.json"), """
+                { "files": {
+                    "a.jpg": { "people": ["Марія"], "photographer": "олег", "groups": [], "albums": [], "place": "", "notes": "" },
+                    "b.jpg": { "people": [], "photographer": "Марія", "groups": [], "albums": [], "place": "", "notes": "" }
+                } }
+                """);
+
+            var tags = new TagsService();
+            var folders = tags.RenamePeople(new[] { root }, new[] { "Олег" }, "Олег П");
+
+            Assert.Equal(1, folders);
+            var file = tags.ReadTagsFile(root);
+            Assert.Equal("Олег П", file.Files["a.jpg"].Photographer);
+            Assert.Equal(new[] { "Марія" }, file.Files["a.jpg"].People);
+            Assert.Equal("Марія", file.Files["b.jpg"].Photographer);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void Same_spelling_does_not_rewrite_the_file()
     {
         var root = Path.Combine(Path.GetTempPath(), "mt-people-" + Guid.NewGuid().ToString("N"));

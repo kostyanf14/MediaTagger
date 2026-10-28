@@ -78,6 +78,8 @@ public class FileSystemService
         {
             var tags = file.Tags;
             tags.People.ForEach(p => people.Add(p));
+            // A photographer is offered wherever people are, and the other way round.
+            if (!string.IsNullOrWhiteSpace(tags.Photographer)) people.Add(tags.Photographer.Trim());
             tags.Groups.ForEach(g => groups.Add(g));
             tags.Albums.ForEach(a => albums.Add(a));
             if (!string.IsNullOrWhiteSpace(tags.Place)) places.Add(tags.Place.Trim());
@@ -170,6 +172,7 @@ public class FileSystemService
             {
                 var q = request.Query.ToLower();
                 var match = t.People.Any(p => p.ToLower().Contains(q))
+                    || t.Photographer.ToLower().Contains(q)
                     || t.Place.ToLower().Contains(q)
                     || t.Groups.Any(g => g.ToLower().Contains(q))
                     || t.Albums.Any(a => a.ToLower().Contains(q))

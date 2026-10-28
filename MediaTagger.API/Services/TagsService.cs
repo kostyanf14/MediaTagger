@@ -72,6 +72,8 @@ public class TagsService
                     tags.Albums = Merge(tags.Albums, request.Albums);
                     if (!string.IsNullOrWhiteSpace(request.Place))
                         tags.Place = request.Place.Trim();
+                    if (!string.IsNullOrWhiteSpace(request.Photographer))
+                        tags.Photographer = request.Photographer.Trim();
 
                     updated++;
                 }
@@ -118,6 +120,13 @@ public class TagsService
                     var changed = false;
                     foreach (var tags in tagsFile.Files.Values)
                     {
+                        // The photographer is a person too, just not in the frame.
+                        if (tags.Photographer is { } photographer && sources.Contains(photographer.Trim())
+                            && photographer != target)
+                        {
+                            tags.Photographer = target;
+                            changed = true;
+                        }
                         if (tags.People == null || ReplacePeople(tags.People, sources, target) is not { } next) continue;
                         tags.People = next;
                         changed = true;

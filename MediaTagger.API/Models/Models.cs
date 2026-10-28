@@ -45,6 +45,11 @@ public class MediaFile
 public class FileTags
 {
     public List<string> People { get; set; } = new();
+    /// <summary>
+    /// Who took the photo: there, but not in the frame. Kept apart from <see cref="People"/>
+    /// so face recognition never looks for their face in it.
+    /// </summary>
+    public string Photographer { get; set; } = "";
     public string Place { get; set; } = "";
     public List<string> Groups { get; set; } = new();
     public List<string> Albums { get; set; } = new();
@@ -101,6 +106,8 @@ public class BulkTagsRequest
     public List<string> Albums { get; set; } = new();
     /// <summary>Applied only when non-empty; blank leaves each file's own place alone.</summary>
     public string? Place { get; set; }
+    /// <summary>Like <see cref="Place"/>: blank leaves each file's own photographer alone.</summary>
+    public string? Photographer { get; set; }
 }
 
 public class SearchRequest

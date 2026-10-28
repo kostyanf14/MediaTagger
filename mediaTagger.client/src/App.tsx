@@ -365,9 +365,12 @@ export default function App() {
 
   // Newly used tags go straight into the suggestion lists. Asking the server to
   // recount the whole library after every chip would say the same thing, later.
-  const rememberTags = useCallback((used: { people?: string[]; groups?: string[]; albums?: string[]; place?: string }) => {
+  const rememberTags = useCallback((used: {
+    people?: string[]; photographer?: string; groups?: string[]; albums?: string[]; place?: string
+  }) => {
     setAllTags(prev => {
-      const people = withSuggestions(prev.people, used.people ?? [])
+      // A photographer is a person too; blank values are skipped.
+      const people = withSuggestions(prev.people, [...(used.people ?? []), used.photographer ?? ''])
       const groups = withSuggestions(prev.groups, used.groups ?? [])
       const albums = withSuggestions(prev.albums, used.albums ?? [])
       const places = withSuggestions(prev.places, used.place ? [used.place] : [], true)
@@ -382,6 +385,7 @@ export default function App() {
   const handleTagsSaved = useCallback((applied: BulkTagsRequest) => {
     const touched = new Set(applied.filePaths)
     const place = applied.place?.trim()
+    const photographer = applied.photographer?.trim()
     setFiles(prev => prev.map(f => (touched.has(f.filePath)
       ? {
           ...f,
@@ -390,7 +394,8 @@ export default function App() {
             people: mergeTagList(f.tags.people, applied.people),
             groups: mergeTagList(f.tags.groups, applied.groups),
             albums: mergeTagList(f.tags.albums, applied.albums),
-            place: place || f.tags.place
+            place: place || f.tags.place,
+            photographer: photographer || f.tags.photographer
           }
         }
       : f)))

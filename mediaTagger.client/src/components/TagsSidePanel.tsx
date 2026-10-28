@@ -9,6 +9,8 @@ import LocationOnIcon from '@mui/icons-material/LocationOn'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import MapIcon from '@mui/icons-material/Map'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import ContentPasteIcon from '@mui/icons-material/ContentPaste'
 import { MediaFile, FileTags, Coordinates, BulkTagsRequest, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { CoordinatePicker } from './CoordinatePicker'
 import { Thumbnail } from './Thumbnail'
@@ -57,6 +59,60 @@ function parseCoordinates(text: string): Coordinates | null {
   return { lat, lng }
 }
 
+/** Adds the names not there yet, keeping the existing order and ignoring case-only repeats. */
+function mergePeople(existing: string[], added: string[]): string[] {
+  const known = new Set(existing.map(p => p.toLowerCase()))
+  return [...existing, ...added.filter(p => !known.has(p.toLowerCase()))]
+}
+
+/**
+ * The people field, with copy and paste beside it: the same few people tend to be
+ * on a run of photos, and picking them one by one on each gets old fast.
+ */
+function PeopleField({ value, options, onChange, copied, onCopy }: {
+  value: string[]
+  options: string[]
+  onChange: (people: string[]) => void
+  copied: string[]
+  /** Left out where there is nothing to copy from (a bulk selection). */
+  onCopy?: () => void
+}) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+      <Autocomplete
+        multiple freeSolo
+        sx={{ flex: 1, minWidth: 0 }}
+        options={options}
+        value={value}
+        onChange={(_, v) => onChange(v as string[])}
+        renderTags={(val, getProps) =>
+          val.map((opt, i) => <Chip label={opt} size="small" {...getProps({ index: i })} key={i} />)
+        }
+        renderInput={(params) => (
+          <TextField {...params} label="Люди" size="small" placeholder="Додати людину..." />
+        )}
+      />
+      {onCopy && (
+        <Tooltip title="Копіювати людей">
+          <span>
+            <IconButton size="small" sx={{ mt: 0.5 }} disabled={!value.length} onClick={onCopy}>
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      )}
+      <Tooltip title={copied.length ? `Вставити: ${copied.join(', ')}` : 'Спершу скопіюйте людей з іншого фото'}>
+        <span>
+          <IconButton size="small" sx={{ mt: 0.5 }} disabled={!copied.length}
+            onClick={() => onChange(mergePeople(value, copied))}>
+            <ContentPasteIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Box>
+  )
+}
+
 export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, roots }: Props) {
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
@@ -78,7 +134,11 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
   const [bulkGroups, setBulkGroups] = useState<string[]>([])
   const [bulkAlbums, setBulkAlbums] = useState<string[]>([])
   const [bulkPlace, setBulkPlace] = useState('')
+  const [bulkPhotographer, setBulkPhotographer] = useState('')
   const [bulkResult, setBulkResult] = useState<string | null>(null)
+  // People copied from one photo, to paste onto the next ones. The panel stays
+  // mounted, so this outlives switching between photos.
+  const [copiedPeople, setCopiedPeople] = useState<string[]>([])
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>()
   // Holds a write that has been promised to the user but not yet sent.
   const pending = useRef<{ path: string; tags: FileTags } | null>(null)
@@ -104,7 +164,7 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
 
   // A different selection starts from empty fields, and drops any stale result note.
   useEffect(() => {
-    setBulkPeople([]); setBulkGroups([]); setBulkAlbums([]); setBulkPlace('')
+    setBulkPeople([]); setBulkGroups([]); setBulkAlbums([]); setBulkPlace(''); setBulkPhotographer('')
     setBulkResult(null)
   }, [selection.length, selection[0]?.filePath])
 
@@ -117,11 +177,12 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
         people: bulkPeople,
         groups: bulkGroups,
         albums: bulkAlbums,
-        place: bulkPlace.trim() || undefined
+        place: bulkPlace.trim() || undefined,
+        photographer: bulkPhotographer.trim() || undefined
       }
       const res = await mediaApi.bulkAddTags(request)
       setBulkResult(`Оновлено файлів: ${res.data}`)
-      setBulkPeople([]); setBulkGroups([]); setBulkAlbums([]); setBulkPlace('')
+      setBulkPeople([]); setBulkGroups([]); setBulkAlbums([]); setBulkPlace(''); setBulkPhotographer('')
       onSaved(request)
     } catch {
       setBulkResult('Не вдалося застосувати теги')
@@ -274,16 +335,25 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               кожного файлу лишаються без змін.
             </Typography>
 
+            <PeopleField value={bulkPeople} options={allTags.people} onChange={setBulkPeople}
+              copied={copiedPeople} />
+
             <Autocomplete
-              multiple freeSolo
+              freeSolo
+              selectOnFocus
+              handleHomeEndKeys
               options={allTags.people}
-              value={bulkPeople}
-              onChange={(_, v) => setBulkPeople(v as string[])}
-              renderTags={(val, getProps) =>
-                val.map((opt, i) => <Chip label={opt} size="small" {...getProps({ index: i })} key={i} />)
-              }
+              inputValue={bulkPhotographer}
+              onInputChange={(_, value, reason) => { if (reason === 'input') setBulkPhotographer(value) }}
+              onChange={(_, value) => setBulkPhotographer(typeof value === 'string' ? value : '')}
               renderInput={(params) => (
-                <TextField {...params} label="Люди" size="small" placeholder="Додати людину..." />
+                <TextField
+                  {...params}
+                  label="Фотограф"
+                  size="small"
+                  placeholder="Хто знімав"
+                  helperText="Заповніть, щоб перезаписати фотографа в усіх вибраних"
+                />
               )}
             />
 
@@ -345,7 +415,8 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               fullWidth variant="contained"
               startIcon={<SaveIcon />}
               onClick={handleBulkApply}
-              disabled={saving || (!bulkPeople.length && !bulkGroups.length && !bulkAlbums.length && !bulkPlace.trim())}
+              disabled={saving || (!bulkPeople.length && !bulkGroups.length && !bulkAlbums.length
+                && !bulkPlace.trim() && !bulkPhotographer.trim())}
             >
               {saving ? 'Застосування...' : `Додати теги до ${selection.length} файлів`}
             </Button>
@@ -414,18 +485,9 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               }
             />
 
-            <Autocomplete
-              multiple freeSolo
-              options={allTags.people}
-              value={tags.people}
-              onChange={(_, v) => applyTagChange({ people: v as string[] })}
-              renderTags={(val, getProps) =>
-                val.map((opt, i) => <Chip label={opt} size="small" {...getProps({ index: i })} key={i} />)
-              }
-              renderInput={(params) => (
-                <TextField {...params} label="Люди" size="small" placeholder="Додати людину..." />
-              )}
-            />
+            <PeopleField value={tags.people} options={allTags.people}
+              onChange={people => applyTagChange({ people })}
+              copied={copiedPeople} onCopy={() => setCopiedPeople(tags.people)} />
 
             <PhotoFaces
               roots={roots}
@@ -433,6 +495,22 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               people={tags.people}
               allPeople={allTags.people}
               onAddPerson={person => applyTagChange({ people: [...tags.people, person] })}
+            />
+
+            {/* Its value is the file's own, so nothing picked on the photo before lingers.
+                autoSelect saves what was typed when the field loses focus. */}
+            <Autocomplete
+              freeSolo
+              autoSelect
+              selectOnFocus
+              handleHomeEndKeys
+              options={allTags.people}
+              value={tags.photographer || null}
+              onChange={(_, value) => applyTagChange({ photographer: typeof value === 'string' ? value.trim() : '' })}
+              renderInput={(params) => (
+                <TextField {...params} label="Фотограф" size="small" placeholder="Хто знімав"
+                  helperText="Був поруч, але не в кадрі" />
+              )}
             />
 
             <Autocomplete

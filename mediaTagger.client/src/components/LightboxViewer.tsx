@@ -15,6 +15,7 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn'
 import ZoomOutIcon from '@mui/icons-material/ZoomOut'
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -189,6 +190,15 @@ export function LightboxViewer({ file, files, onClose, onNavigate, onOpenTags, c
               <Chip key={p} label={p} size="small"
                 sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.15)', color: 'white' }} />
             ))}
+            {file.tags.photographer && (
+              <Tooltip title="Фотограф">
+                <Chip
+                  icon={<PhotoCameraIcon sx={{ fontSize: '12px !important', color: 'white !important' }} />}
+                  label={file.tags.photographer} size="small"
+                  sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.1)', color: 'white' }}
+                />
+              </Tooltip>
+            )}
             {file.tags.place && (
               <Chip
                 icon={<LocationOnIcon sx={{ fontSize: '12px !important', color: 'white !important' }} />}

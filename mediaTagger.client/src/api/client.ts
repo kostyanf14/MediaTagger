@@ -101,7 +101,10 @@ export async function unlockServer(key: string): Promise<'ok' | 'rejected' | 'do
 
 export interface Coordinates { lat: number; lng: number }
 export interface FileTags {
-  people: string[]; place: string; groups: string[]
+  people: string[]
+  /** Who took the photo: there, but not in the frame. Older files may not have it. */
+  photographer?: string
+  place: string; groups: string[]
   albums: string[]; coordinates?: Coordinates; notes: string
   dateTaken?: string
 }
@@ -154,6 +157,7 @@ export interface BulkTagsRequest {
   groups: string[]
   albums: string[]
   place?: string
+  photographer?: string
 }
 
 export interface FaceScanStatus {
