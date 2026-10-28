@@ -35,6 +35,8 @@ interface Props {
   allTags: { people: string[]; groups: string[]; albums: string[]; places: string[] }
   /** The open library; face suggestions are learned from the tags across all of it. */
   roots: string[]
+  /** Filled in on a photo that never had a photographer set; blank fills in nobody. */
+  defaultPhotographer: string
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -113,7 +115,7 @@ function PeopleField({ value, options, onChange, copied, onCopy }: {
   )
 }
 
-export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, roots }: Props) {
+export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTags, roots, defaultPhotographer }: Props) {
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
   const { revealInExplorer, openFile } = useElectron()
@@ -149,7 +151,8 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
   // autosave, and re-seeding then would discard whatever is being edited.
   useEffect(() => {
     if (file) {
-      setTags({ ...file.tags })
+      // Only shown until something on the photo is saved, which writes it along.
+      setTags({ ...file.tags, photographer: file.tags.photographer ?? (defaultPhotographer || null) })
       setSavedPlace(file.tags.place)
       setCoordStr(
         file.tags.coordinates
@@ -509,7 +512,9 @@ export function TagsSidePanel({ selection, onClose, onSaved, onAutoSaved, allTag
               onChange={(_, value) => applyTagChange({ photographer: typeof value === 'string' ? value.trim() : '' })}
               renderInput={(params) => (
                 <TextField {...params} label="Фотограф" size="small" placeholder="Хто знімав"
-                  helperText="Був поруч, але не в кадрі" />
+                  helperText={file.tags.photographer == null && tags.photographer
+                    ? 'За замовчуванням, збережеться разом з іншими тегами'
+                    : 'Був поруч, але не в кадрі'} />
               )}
             />
 

@@ -102,8 +102,11 @@ export async function unlockServer(key: string): Promise<'ok' | 'rejected' | 'do
 export interface Coordinates { lat: number; lng: number }
 export interface FileTags {
   people: string[]
-  /** Who took the photo: there, but not in the frame. Older files may not have it. */
-  photographer?: string
+  /**
+   * Who took the photo: there, but not in the frame. Null or absent means never set,
+   * so the default photographer is offered; blank means nobody on purpose.
+   */
+  photographer?: string | null
   place: string; groups: string[]
   albums: string[]; coordinates?: Coordinates; notes: string
   dateTaken?: string
@@ -139,6 +142,8 @@ export interface AppSettings {
   /** CPU threads for the face scan; 0 or absent lets the server pick. */
   faceThreads?: number
   faceGpu?: boolean
+  /** Offered as the photographer on photos that never had one set. */
+  defaultPhotographer?: string
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {

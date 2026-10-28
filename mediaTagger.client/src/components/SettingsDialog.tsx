@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography,
-  RadioGroup, FormControlLabel, Radio, Box, Slider, Switch, Divider, CircularProgress
+  RadioGroup, FormControlLabel, Radio, Box, Slider, Switch, Divider, CircularProgress,
+  Autocomplete, TextField
 } from '@mui/material'
 import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi } from '../api/client'
 
@@ -15,12 +16,14 @@ const VIDEO_MODES: { value: VideoFaceMode; label: string; hint: string }[] = [
 interface Props {
   open: boolean
   settings: AppSettings
+  /** Known people, offered for the default photographer. */
+  people: string[]
   onChange: (settings: AppSettings) => Promise<unknown> | void
   onClose: () => void
 }
 
 /** App-wide preferences. Each change is saved as soon as it is made. */
-export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
+export function SettingsDialog({ open, settings, people, onChange, onClose }: Props) {
   const videoFaces = settings.videoFaces ?? 'Frames'
   const [device, setDevice] = useState<FaceDeviceInfo | null>(null)
   const [checkingDevice, setCheckingDevice] = useState(false)
@@ -56,6 +59,26 @@ export function SettingsDialog({ open, settings, onChange, onClose }: Props) {
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle>Налаштування</DialogTitle>
       <DialogContent>
+        <Typography variant="subtitle2" gutterBottom>Фотограф за замовчуванням</Typography>
+        <Autocomplete
+          freeSolo
+          autoSelect
+          selectOnFocus
+          handleHomeEndKeys
+          options={people}
+          value={settings.defaultPhotographer || null}
+          onChange={(_, value) => save({ defaultPhotographer: typeof value === 'string' ? value.trim() : '' })}
+          renderInput={(params) => (
+            <TextField {...params} size="small" placeholder="Нікого" sx={{ mt: 1 }} />
+          )}
+        />
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          Підставляється на фото, де фотографа ще не вказували, і зберігається разом
+          з іншими тегами цього фото. Якщо очистити поле на фото, воно лишиться порожнім.
+        </Typography>
+
+        <Divider sx={{ my: 2 }} />
+
         <Typography variant="subtitle2" gutterBottom>Обличчя у відео</Typography>
         <RadioGroup value={videoFaces}
           onChange={e => save({ videoFaces: e.target.value as VideoFaceMode })}>

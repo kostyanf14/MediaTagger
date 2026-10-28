@@ -172,7 +172,7 @@ public class FileSystemService
             {
                 var q = request.Query.ToLower();
                 var match = t.People.Any(p => p.ToLower().Contains(q))
-                    || t.Photographer.ToLower().Contains(q)
+                    || (t.Photographer?.ToLower().Contains(q) ?? false)
                     || t.Place.ToLower().Contains(q)
                     || t.Groups.Any(g => g.ToLower().Contains(q))
                     || t.Albums.Any(a => a.ToLower().Contains(q))

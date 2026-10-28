@@ -366,7 +366,7 @@ export default function App() {
   // Newly used tags go straight into the suggestion lists. Asking the server to
   // recount the whole library after every chip would say the same thing, later.
   const rememberTags = useCallback((used: {
-    people?: string[]; photographer?: string; groups?: string[]; albums?: string[]; place?: string
+    people?: string[]; photographer?: string | null; groups?: string[]; albums?: string[]; place?: string
   }) => {
     setAllTags(prev => {
       // A photographer is a person too; blank values are skipped.
@@ -708,6 +708,7 @@ export default function App() {
               onAutoSaved={handleTagsAutoSaved}
               allTags={allTags}
               roots={libraryRoots}
+              defaultPhotographer={settings.defaultPhotographer ?? ''}
             />
           </Box>
         </Box>
@@ -722,7 +723,7 @@ export default function App() {
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
       />
 
-      <SettingsDialog open={settingsOpen} settings={settings}
+      <SettingsDialog open={settingsOpen} settings={settings} people={allTags.people}
         onChange={saveSettings} onClose={() => setSettingsOpen(false)} />
     </ThemeProvider>
   )

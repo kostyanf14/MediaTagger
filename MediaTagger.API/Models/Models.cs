@@ -14,6 +14,8 @@ public class AppSettings
     public int FaceThreads { get; set; }
     /// <summary>Find faces on the graphics card (DirectML, Windows only); falls back to the CPU.</summary>
     public bool FaceGpu { get; set; }
+    /// <summary>Offered as the photographer on photos that never had one set; blank offers nobody.</summary>
+    public string DefaultPhotographer { get; set; } = "";
 }
 
 /// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>
@@ -47,9 +49,10 @@ public class FileTags
     public List<string> People { get; set; } = new();
     /// <summary>
     /// Who took the photo: there, but not in the frame. Kept apart from <see cref="People"/>
-    /// so face recognition never looks for their face in it.
+    /// so face recognition never looks for their face in it. Null means never set, so the
+    /// default photographer from the settings can be offered; blank means nobody on purpose.
     /// </summary>
-    public string Photographer { get; set; } = "";
+    public string? Photographer { get; set; }
     public string Place { get; set; } = "";
     public List<string> Groups { get; set; } = new();
     public List<string> Albums { get; set; } = new();
