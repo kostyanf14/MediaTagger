@@ -4,16 +4,18 @@ import FolderIcon from '@mui/icons-material/Folder'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import { FolderNode } from '../api/client'
 
 interface Props {
   node: FolderNode
   selectedPath: string
   onSelect: (path: string) => void
+  onRename: (node: FolderNode) => void
   depth?: number
 }
 
-export function FolderTreeNode({ node, selectedPath, onSelect, depth = 0 }: Props) {
+export function FolderTreeNode({ node, selectedPath, onSelect, onRename, depth = 0 }: Props) {
   const [expanded, setExpanded] = useState(depth === 0)
   const isSelected = selectedPath === node.path
   const hasChildren = node.children.length > 0
@@ -32,6 +34,7 @@ export function FolderTreeNode({ node, selectedPath, onSelect, depth = 0 }: Prop
           bgcolor: isSelected ? 'primary.main' : 'transparent',
           color: isSelected ? 'primary.contrastText' : 'text.primary',
           '&:hover': { bgcolor: isSelected ? 'primary.dark' : 'action.hover' },
+          '&:hover .rename-btn': { opacity: 1 },
           transition: 'background-color 0.15s'
         }}
         onClick={() => onSelect(node.path)}
@@ -58,6 +61,19 @@ export function FolderTreeNode({ node, selectedPath, onSelect, depth = 0 }: Prop
         >
           {node.name}
         </Typography>
+        <Tooltip title="Перейменувати папку">
+          <IconButton
+            className="rename-btn"
+            size="small"
+            onClick={e => { e.stopPropagation(); onRename(node) }}
+            sx={{
+              ml: 'auto', p: 0.25, opacity: isSelected ? 1 : 0,
+              color: isSelected ? 'inherit' : 'text.secondary'
+            }}
+          >
+            <DriveFileRenameOutlineIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {expanded && hasChildren && (
@@ -68,6 +84,7 @@ export function FolderTreeNode({ node, selectedPath, onSelect, depth = 0 }: Prop
               node={child}
               selectedPath={selectedPath}
               onSelect={onSelect}
+              onRename={onRename}
               depth={depth + 1}
             />
           ))}

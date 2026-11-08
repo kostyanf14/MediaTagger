@@ -65,6 +65,9 @@ public class FileSystemService
     /// <summary>Call after changing a folder's contents directly, e.g. deleting a file.</summary>
     public void InvalidateFolder(string folderPath) => _index.Invalidate(folderPath);
 
+    /// <summary>Call after a folder is renamed or removed.</summary>
+    public void Forget(string path) => _index.Forget(path);
+
     public AllTagsResponse GetAllTags(IEnumerable<string> roots)
     {
         var people = new HashSet<string>();

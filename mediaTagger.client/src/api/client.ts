@@ -162,6 +162,11 @@ export interface ScanProgress {
   total: number
   folder: string
 }
+export interface RenameResponse {
+  path: string
+  merged: boolean
+  settings: AppSettings
+}
 export interface BulkTagsRequest {
   filePaths: string[]
   people: string[]
@@ -256,6 +261,8 @@ export const mediaApi = {
     api.get<boolean>('/media/folder-exists', { params: { folderPath } }),
   deleteFile: (filePath: string) =>
     api.delete('/media/file', { params: { filePath } }),
+  rename: (path: string, newName: string, merge = false) =>
+    api.post<RenameResponse>('/media/rename', { path, newName, merge }),
   // How many of these a delete would remove for good instead of moving to the recycle bin.
   deleteCheck: (filePaths: string[]) =>
     api.post<number>('/media/delete-check', filePaths),

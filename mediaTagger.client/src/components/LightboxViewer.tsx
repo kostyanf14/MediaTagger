@@ -17,6 +17,7 @@ import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -40,6 +41,8 @@ interface Props {
   onShowInApp?: (file: MediaFile) => void
   /** Asks to delete the file from disk; left out where the viewer cannot follow a delete. */
   onDelete?: (file: MediaFile) => void
+  /** Asks for a new file name. */
+  onRename?: (file: MediaFile) => void
   /** A click beside the picture closes the viewer. */
   closeOnOutsideClick?: boolean
   /** Take the whole screen while this photo is open. */
@@ -66,7 +69,7 @@ function pictureRect(img: HTMLImageElement) {
 }
 
 export function LightboxViewer({
-  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete,
+  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, onRename,
   closeOnOutsideClick, fullscreen, copyPhoto = true, paused
 }: Props) {
   const { revealInExplorer, openFile, isElectron, copyPhoto: copyPhotoToClipboard } = useElectron()
@@ -348,6 +351,14 @@ export function LightboxViewer({
                 <IconButton size="small" onClick={() => { onShowInApp(file); onClose() }}
                   sx={{ color: 'white' }}>
                   <PhotoLibraryIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onRename && (
+              <Tooltip title="Перейменувати файл">
+                <IconButton size="small" onClick={() => onRename(file)} sx={{ color: 'white' }}>
+                  <DriveFileRenameOutlineIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}

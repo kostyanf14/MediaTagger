@@ -23,11 +23,12 @@ import { MapView } from './components/MapView'
 import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
 import { DeleteFilesDialog } from './components/DeleteFilesDialog'
+import { RenameDialog, RenameTarget } from './components/RenameDialog'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import {
-  mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress,
+  mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress, RenameResponse,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest,
   checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
@@ -61,6 +62,17 @@ function normalizeFolder(path: string): string {
  */
 function folderKey(path: string): string {
   return normalizeFolder(path).replace(/\//g, '\\').toLowerCase()
+}
+
+/** The path after a file or folder rename, or the path unchanged when it was not inside it. */
+function mapStoredPath(path: string, from: string, to: string): string {
+  if (!path) return path
+  const key = folderKey(path)
+  const oldKey = folderKey(from)
+  if (key === oldKey) return to
+  if (!key.startsWith(oldKey + '\\')) return path
+  const slash = path.includes('/') && !path.includes('\\') ? '/' : '\\'
+  return to.replace(/[\\/]+$/, '') + slash + path.replace(/[\\/]+$/, '').slice(normalizeFolder(from).length + 1)
 }
 
 /** Appends what is new, ignoring case-only repeats — the same rule the server applies. */
@@ -107,6 +119,7 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false)
   const [recentAnchor, setRecentAnchor] = useState<null | HTMLElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   // Browsing a folder includes everything below it unless the user says otherwise.
   const [recursive, setRecursive] = useState(true)
   const [scan, setScan] = useState<ScanProgress | null>(null)
@@ -349,6 +362,32 @@ export default function App() {
     setFiles(prev => prev.filter(f => !gone.has(f.filePath)))
     if (complete) setDeleteRequest(null)
     loadAllTags(libraryRoots)
+    markTagsChanged()
+  }
+
+  const handleRenamed = async (oldPath: string, result: RenameResponse) => {
+    const to = result.path
+    setSettings(result.settings)
+    setRenameTarget(null)
+    const nextRoot = mapStoredPath(rootPath, oldPath, to)
+    const nextFolder = mapStoredPath(currentFolder, oldPath, to)
+    setRootPath(nextRoot)
+    setCurrentFolder(nextFolder)
+    setLightboxFile(prev => {
+      if (!prev) return prev
+      const mapped = mapStoredPath(prev.filePath, oldPath, to)
+      if (mapped === prev.filePath) return prev
+      return { ...prev, filePath: mapped, fileName: mapped.split(/[/\\]/).pop() || prev.fileName }
+    })
+    const selected = renameTarget?.kind === 'file' ? [mapStoredPath(renameTarget.path, oldPath, to)] : []
+    if (nextRoot) loadFolderTree(nextRoot).catch(() => {})
+    await loadFiles(nextFolder)
+    if (selected.length) setSelectedPaths(selected)
+    const roots = result.settings.libraryFolders?.length
+      ? result.settings.libraryFolders
+      : (nextRoot ? [nextRoot] : [])
+    loadAllTags(roots)
+    facesApi.scan(roots).catch(() => {})
     markTagsChanged()
   }
 
@@ -620,7 +659,8 @@ export default function App() {
           <Box sx={{ flex: 1, overflowY: 'auto', py: 0.5 }}>
             {folderTree ? (
               <FolderTreeNode node={folderTree} selectedPath={currentFolder}
-                onSelect={path => { setCurrentFolder(path); loadFiles(path) }} />
+                onSelect={path => { setCurrentFolder(path); loadFiles(path) }}
+                onRename={node => setRenameTarget({ path: node.path, name: node.name, kind: 'folder' })} />
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block' }}>
                 Оберіть кореневу папку з медіафайлами
@@ -700,6 +740,7 @@ export default function App() {
                     setLightboxFile(file)
                   }}
                   onDelete={file => setDeleteRequest([file])}
+                  onRename={file => setRenameTarget({ path: file.filePath, name: file.fileName, kind: 'file' })}
                 />
               </Box>
 
@@ -754,11 +795,14 @@ export default function App() {
         onNavigate={setLightboxFile}
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
         onDelete={f => setDeleteRequest([f])}
+        onRename={f => setRenameTarget({ path: f.filePath, name: f.fileName, kind: 'file' })}
         closeOnOutsideClick={!!settings.closeViewerOnOutsideClick}
-        paused={!!deleteRequest}
+        paused={!!deleteRequest || !!renameTarget}
       />
 
       <DeleteFilesDialog files={deleteRequest} onCancel={() => setDeleteRequest(null)} onDeleted={handleDeleted} />
+
+      <RenameDialog target={renameTarget} onCancel={() => setRenameTarget(null)} onRenamed={handleRenamed} />
 
       <SettingsDialog open={settingsOpen} settings={settings} people={allTags.people}
         onChange={saveSettings} onClose={() => setSettingsOpen(false)} />

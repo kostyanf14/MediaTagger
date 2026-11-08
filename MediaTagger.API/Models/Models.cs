@@ -242,6 +242,21 @@ public class FaceDecision
 }
 
 /// <summary>Every name in <see cref="From"/> becomes <see cref="To"/>, in tags and on confirmed faces.</summary>
+public class RenameRequest
+{
+    public string Path { get; set; } = "";
+    public string NewName { get; set; } = "";
+    /// <summary>When the new folder name already exists, move this folder's contents into it.</summary>
+    public bool Merge { get; set; }
+}
+
+public class RenameResponse
+{
+    public string Path { get; set; } = "";
+    public bool Merged { get; set; }
+    public AppSettings Settings { get; set; } = new();
+}
+
 public class RenamePeopleRequest
 {
     public List<string> RootPaths { get; set; } = new();
