@@ -202,6 +202,57 @@ public class TagsService
         }
     }
 
+    /// <summary>Keeps a file's tags with it when the file is renamed. The key is the file name.</summary>
+    public void MoveFileEntry(string oldPath, string newPath)
+    {
+        var oldDir = Path.GetDirectoryName(oldPath) ?? "";
+        var newDir = Path.GetDirectoryName(newPath) ?? "";
+        var oldName = Path.GetFileName(oldPath);
+        var newName = Path.GetFileName(newPath);
+        lock (_writeGate)
+        {
+            var source = ReadTagsFile(oldDir);
+            var key = source.Files.Keys.FirstOrDefault(k => k.Equals(oldName, StringComparison.OrdinalIgnoreCase));
+            if (key == null) return;
+            var tags = source.Files[key];
+            source.Files.Remove(key);
+
+            if (string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
+            {
+                source.Files[newName] = tags;
+                WriteTagsFile(oldDir, source);
+                return;
+            }
+
+            WriteTagsFile(oldDir, source);
+            var dest = ReadTagsFile(newDir);
+            dest.Files[newName] = tags;
+            WriteTagsFile(newDir, dest);
+        }
+    }
+
+    /// <summary>
+    /// Copies tags for files that moved into <paramref name="destDir"/>.
+    /// A name already tagged there is left alone: that file was not overwritten.
+    /// </summary>
+    public void MergeFolderTags(string sourceDir, string destDir)
+    {
+        lock (_writeGate)
+        {
+            var source = ReadTagsFile(sourceDir);
+            if (source.Files.Count == 0) return;
+            var dest = ReadTagsFile(destDir);
+            var changed = false;
+            foreach (var (name, tags) in source.Files)
+            {
+                if (dest.Files.Keys.Any(k => k.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+                dest.Files[name] = tags;
+                changed = true;
+            }
+            if (changed) WriteTagsFile(destDir, dest);
+        }
+    }
+
     /// <summary>Drops a file's entry, for when the file itself is being deleted.</summary>
     public void RemoveFileTags(string filePath)
     {

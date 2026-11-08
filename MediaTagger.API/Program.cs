@@ -12,6 +12,7 @@ builder.Services.AddSingleton<ExifCache>();
 builder.Services.AddSingleton<TagsService>();
 builder.Services.AddSingleton<LibraryIndex>();
 builder.Services.AddSingleton<FileSystemService>();
+builder.Services.AddSingleton<MediaRename>();
 builder.Services.AddSingleton<ExifService>();
 builder.Services.AddSingleton<ThumbnailService>();
 builder.Services.AddSingleton<FaceStore>();

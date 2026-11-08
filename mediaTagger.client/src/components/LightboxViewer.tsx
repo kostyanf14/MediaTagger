@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
-  Box, IconButton, Typography, Backdrop, Fade, Chip, Tooltip, Button
+  Box, IconButton, Typography, Backdrop, Fade, Chip, Tooltip, Button, Snackbar
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
@@ -17,6 +17,7 @@ import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -40,8 +41,14 @@ interface Props {
   onShowInApp?: (file: MediaFile) => void
   /** Asks to delete the file from disk; left out where the viewer cannot follow a delete. */
   onDelete?: (file: MediaFile) => void
+  /** Asks for a new file name. */
+  onRename?: (file: MediaFile) => void
   /** A click beside the picture closes the viewer. */
   closeOnOutsideClick?: boolean
+  /** Take the whole screen while this photo is open. */
+  fullscreen?: boolean
+  /** Ctrl+C copies the open photo. Absent means on. */
+  copyPhoto?: boolean
   /** A dialog is open on top; the keys are its, not the viewer's. */
   paused?: boolean
 }
@@ -62,9 +69,13 @@ function pictureRect(img: HTMLImageElement) {
 }
 
 export function LightboxViewer({
-  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, closeOnOutsideClick, paused
+  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, onRename,
+  closeOnOutsideClick, fullscreen, copyPhoto = true, paused
 }: Props) {
-  const { revealInExplorer, openFile, isElectron } = useElectron()
+  const { revealInExplorer, openFile, isElectron, copyPhoto: copyPhotoToClipboard } = useElectron()
+  const copyPhotoRef = useRef(copyPhotoToClipboard)
+  copyPhotoRef.current = copyPhotoToClipboard
+  const [copyNote, setCopyNote] = useState<string | null>(null)
   // Set when the <video> element gives up on the file's codec.
   const [videoError, setVideoError] = useState(false)
   const [view, setView] = useState({ zoom: MIN_ZOOM, x: 0, y: 0 })
@@ -74,6 +85,7 @@ export function LightboxViewer({
   // Held so the browser does not drop the neighbours' downloads half-way.
   const preloaded = useRef<HTMLImageElement[]>([])
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const mediaRef = useRef<HTMLDivElement | null>(null)
   const panStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   // Where the last press went down, to tell a click from the end of a pan.
@@ -123,6 +135,18 @@ export function LightboxViewer({
     if (currentIndex < files.length - 1) onNavigate(files[currentIndex + 1])
   }, [currentIndex, files, onNavigate])
 
+  // The gallery asks for the whole screen. Leaving it on while stepping through
+  // photos, and dropping it when the viewer closes.
+  const open = !!file
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!open || !fullscreen || !shell) return
+    shell.requestFullscreen?.().catch(() => {})
+    return () => {
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {})
+    }
+  }, [open, fullscreen])
+
   // A new file deserves a fresh attempt at the built-in player, at 100%.
   useEffect(() => {
     setVideoError(false)
@@ -167,6 +191,15 @@ export function LightboxViewer({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!file || paused) return
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && copyPhoto && file.type === 'image') {
+        const target = e.target as HTMLElement | null
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return
+        e.preventDefault()
+        copyPhotoRef.current(file.filePath)
+          .then(() => setCopyNote('Фото скопійовано'))
+          .catch(() => setCopyNote('Не вдалося скопіювати фото'))
+        return
+      }
       if (e.key === 'Escape') onClose()
       if (e.key === 'Delete' && onDelete) onDelete(file)
       if (e.key === 'ArrowLeft') goPrev()
@@ -177,7 +210,7 @@ export function LightboxViewer({
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [file, paused, goPrev, goNext, onClose, onDelete, zoomBy, resetZoom])
+  }, [file, paused, copyPhoto, goPrev, goNext, onClose, onDelete, zoomBy, resetZoom])
 
   /**
    * With the setting on, a click on the dark area closes the viewer. Clicks on the
@@ -211,11 +244,12 @@ export function LightboxViewer({
     >
       <Fade in={!!file}>
         <Box
+          ref={shellRef}
           onClick={handleBackgroundClick}
           onPointerDownCapture={e => { pressedAt.current = { x: e.clientX, y: e.clientY } }}
           sx={{
             position: 'relative', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', width: '100vw', height: '100vh'
+            alignItems: 'center', width: '100vw', height: '100vh', bgcolor: '#000'
           }}
         >
           {/* Top bar */}
@@ -321,6 +355,14 @@ export function LightboxViewer({
               </Tooltip>
             )}
 
+            {onRename && (
+              <Tooltip title="Перейменувати файл">
+                <IconButton size="small" onClick={() => onRename(file)} sx={{ color: 'white' }}>
+                  <DriveFileRenameOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
             {onDelete && (
               <Tooltip title="Видалити з диска (Delete)">
                 <IconButton size="small" onClick={() => onDelete(file)} sx={{ color: 'white' }}>
@@ -340,6 +382,14 @@ export function LightboxViewer({
               <CloseIcon />
             </IconButton>
           </Box>
+
+          <Snackbar
+            open={!!copyNote}
+            autoHideDuration={2000}
+            onClose={() => setCopyNote(null)}
+            message={copyNote}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          />
 
           {/* Media */}
           <Box ref={mediaRef} sx={{

@@ -40,6 +40,32 @@ public class SettingsService
 
     public VideoFaceMode VideoFaces => Get().VideoFaces;
 
+    /// <summary>Rewrites remembered folders that were renamed. Other settings stay as they are.</summary>
+    public AppSettings RetargetPaths(string oldFull, string newFull)
+    {
+        var current = Get();
+        string Map(string path) => StoredPath.MapFull(path, oldFull, newFull) ?? path;
+        var next = new AppSettings
+        {
+            DefaultFolder = Map(current.DefaultFolder),
+            RecentFolders = current.RecentFolders.Select(Map).ToList(),
+            LibraryFolders = current.LibraryFolders.Select(Map).ToList(),
+            VideoFaces = current.VideoFaces,
+            FaceThreads = current.FaceThreads,
+            FaceGpu = current.FaceGpu,
+            DefaultPhotographer = current.DefaultPhotographer,
+            CloseViewerOnOutsideClick = current.CloseViewerOnOutsideClick,
+            DoubleClickFullscreen = current.DoubleClickFullscreen,
+            CopyPhotoOnCtrlC = current.CopyPhotoOnCtrlC
+        };
+        if (next.DefaultFolder == current.DefaultFolder
+            && next.RecentFolders.SequenceEqual(current.RecentFolders)
+            && next.LibraryFolders.SequenceEqual(current.LibraryFolders))
+            return current;
+        Save(next);
+        return next;
+    }
+
     public void Save(AppSettings settings)
     {
         AppSettings before;

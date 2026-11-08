@@ -58,9 +58,10 @@ public class ThumbnailService
         ResourceLimits.Thread = 1;
 
         var configuredFfmpeg = config["MediaTagger:FfmpegDirectory"];
-        var ffmpegDir = !string.IsNullOrWhiteSpace(configuredFfmpeg)
-            ? configuredFfmpeg
-            : FindFfmpegDirectory();
+        var ffmpegDir = UsableFfmpegDirectory(configuredFfmpeg);
+        if (ffmpegDir == null && !string.IsNullOrWhiteSpace(configuredFfmpeg))
+            _logger.LogWarning("FFmpeg directory {Path} needs both ffmpeg and ffprobe; searching other locations", configuredFfmpeg);
+        ffmpegDir ??= FindFfmpegDirectory();
         if (!string.IsNullOrEmpty(ffmpegDir))
         {
             // Always pin the directory explicitly — leaving it unset makes Xabe resolve
@@ -518,20 +519,69 @@ public class ThumbnailService
 
     private static string FindFfmpegDirectory()
     {
+        // Package bins before /usr/bin: DSM often has ffmpeg there and ffprobe only in the package.
         var candidates = new[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ffmpeg", "bin"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "ffmpeg", "bin"),
             @"C:\ffmpeg\bin",
-            "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"
+            "/usr/local/bin",
+            "/var/packages/ffmpeg7/target/bin",
+            "/var/packages/ffmpeg6/target/bin",
+            "/var/packages/ffmpeg5/target/bin",
+            "/var/packages/ffmpeg/target/bin",
+            "/opt/homebrew/bin",
+            "/usr/bin"
         };
         foreach (var dir in candidates)
         {
-            var exe = Path.Combine(dir, OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
-            if (File.Exists(exe)) return dir;
+            var usable = UsableFfmpegDirectory(dir);
+            if (usable != null) return usable;
         }
-        return ResolveDirectoryFromPath("ffmpeg");
+        return UsableFfmpegDirectory(ResolveDirectoryFromPath("ffmpeg")) ?? "";
     }
+
+    /// <summary>
+    /// Directory Xabe will actually start from. It lists names itself and insists on both
+    /// tools; ffmpeg alone throws "Cannot find FFmpeg". A symlink is followed, because that
+    /// listing skips links and /usr/bin/ffmpeg is usually one.
+    /// </summary>
+    internal static string? UsableFfmpegDirectory(string? dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) return null;
+        try
+        {
+            if (ListsBothTools(dir)) return dir;
+
+            var link = Path.Combine(dir, OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
+            var target = File.Exists(link) ? File.ResolveLinkTarget(link, returnFinalTarget: true) : null;
+            var realDir = target == null ? null : Path.GetDirectoryName(target.FullName);
+            if (realDir == null || SameDirectory(realDir, dir) || !ListsBothTools(realDir)) return null;
+            return realDir;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool ListsBothTools(string dir)
+    {
+        var ffmpeg = false;
+        var ffprobe = false;
+        foreach (var file in Directory.EnumerateFiles(dir))
+        {
+            var name = Path.GetFileName(file);
+            if (name.Contains("ffprobe", StringComparison.OrdinalIgnoreCase)) ffprobe = true;
+            if (name.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) ffmpeg = true;
+            if (ffmpeg && ffprobe) return true;
+        }
+        return false;
+    }
+
+    private static bool SameDirectory(string a, string b) =>
+        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>Asks the OS where a command lives and returns its directory.</summary>
     private static string ResolveDirectoryFromPath(string command)

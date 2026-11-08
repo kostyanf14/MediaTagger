@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('open-file', filePath)
   },
 
+  // Puts a picture on the system clipboard. filePath is tried first; dataUrl is the fallback.
+  copyImage: (payload) => ipcRenderer.invoke('copy-image', payload),
+
   // Check if running inside Electron
   isElectron: true,
 

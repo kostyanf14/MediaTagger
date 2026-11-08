@@ -321,6 +321,13 @@ public class LibraryIndex : IDisposable
         if (!string.IsNullOrEmpty(parent)) Invalidate(parent);
     }
 
+    /// <summary>Forgets a folder that was renamed or removed, and every cached listing below it.</summary>
+    public void Forget(string path)
+    {
+        InvalidateParent(path);
+        InvalidateTree(path);
+    }
+
     /// <summary>Forgets a folder that went away, along with everything that was below it.</summary>
     private void InvalidateTree(string path)
     {

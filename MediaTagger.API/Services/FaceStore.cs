@@ -275,6 +275,85 @@ public class FaceStore : IDisposable
         Interlocked.Increment(ref _version);
     }
 
+    /// <summary>
+    /// Points every remembered file at its path after a rename or a folder merge.
+    /// A stale row already sitting on the new path is dropped: the file that moved is the one on disk.
+    /// </summary>
+    public void Retarget(string oldFullPath, string newFullPath)
+    {
+        var from = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(oldFullPath)));
+        var to = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(newFullPath)));
+        if (from.Volume != to.Volume || from.Path == to.Path) return;
+
+        List<(string Old, string New)> moves;
+        List<long> droppedFaces;
+        lock (_gate)
+        {
+            moves = _files.Keys
+                .Where(k => k.Volume == from.Volume && StoredPath.Covers(k.Path, from.Path))
+                .Select(k => (k.Path, StoredPath.Map(k.Path, from.Path, to.Path)))
+                .ToList();
+            if (moves.Count == 0) return;
+
+            droppedFaces = new List<long>();
+            using var tx = _connection.BeginTransaction();
+            foreach (var (oldPath, newPath) in moves)
+            {
+                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+                    DropFileRows(from.Volume, newPath, tx, droppedFaces);
+                using var updateFiles = Command("UPDATE files SET path = $n WHERE volume = $v AND path = $o", tx);
+                using var updateFaces = Command("UPDATE faces SET path = $n WHERE volume = $v AND path = $o", tx);
+                updateFiles.Parameters.AddWithValue("$n", newPath);
+                updateFiles.Parameters.AddWithValue("$v", from.Volume);
+                updateFiles.Parameters.AddWithValue("$o", oldPath);
+                updateFiles.ExecuteNonQuery();
+                updateFaces.Parameters.AddWithValue("$n", newPath);
+                updateFaces.Parameters.AddWithValue("$v", from.Volume);
+                updateFaces.Parameters.AddWithValue("$o", oldPath);
+                updateFaces.ExecuteNonQuery();
+            }
+            tx.Commit();
+
+            foreach (var (oldPath, newPath) in moves)
+            {
+                _files.TryRemove((from.Volume, newPath), out _);
+                if (_files.TryRemove((from.Volume, oldPath), out var known))
+                    _files[(from.Volume, newPath)] = known;
+            }
+            foreach (var id in droppedFaces)
+            {
+                _labels.TryRemove(id, out _);
+                foreach (var key in _rejections.Keys)
+                    if (key.FaceId == id) _rejections.TryRemove(key, out _);
+            }
+        }
+        Interlocked.Increment(ref _version);
+    }
+
+    private void DropFileRows(string volume, string path, SqliteTransaction tx, List<long> droppedFaces)
+    {
+        var start = droppedFaces.Count;
+        using (var select = Command("SELECT id FROM faces WHERE volume = $v AND path = $p", tx))
+        {
+            select.Parameters.AddWithValue("$v", volume);
+            select.Parameters.AddWithValue("$p", path);
+            using var reader = select.ExecuteReader();
+            while (reader.Read()) droppedFaces.Add(reader.GetInt64(0));
+        }
+        for (var i = start; i < droppedFaces.Count; i++)
+        {
+            var id = droppedFaces[i];
+            using var drop = Command(
+                "DELETE FROM labels WHERE face_id = $id; DELETE FROM rejections WHERE face_id = $id; DELETE FROM faces WHERE id = $id", tx);
+            drop.Parameters.AddWithValue("$id", id);
+            drop.ExecuteNonQuery();
+        }
+        using var file = Command("DELETE FROM files WHERE volume = $v AND path = $p", tx);
+        file.Parameters.AddWithValue("$v", volume);
+        file.Parameters.AddWithValue("$p", path);
+        file.ExecuteNonQuery();
+    }
+
     /// <summary>Every confirmed face and rejection under one of <paramref name="from"/> takes the name <paramref name="to"/>.</summary>
     public int RenamePeople(IEnumerable<string> from, string to)
     {

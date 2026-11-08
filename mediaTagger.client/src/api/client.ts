@@ -146,6 +146,10 @@ export interface AppSettings {
   defaultPhotographer?: string
   /** A click beside the picture closes the viewer. */
   closeViewerOnOutsideClick?: boolean
+  /** Double-click in the gallery opens the photo on the whole screen. Absent means on. */
+  doubleClickFullscreen?: boolean
+  /** Ctrl+C in the viewer copies the open photo. Absent means on. */
+  copyPhotoOnCtrlC?: boolean
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {
@@ -157,6 +161,11 @@ export interface ScanProgress {
   processed: number
   total: number
   folder: string
+}
+export interface RenameResponse {
+  path: string
+  merged: boolean
+  settings: AppSettings
 }
 export interface BulkTagsRequest {
   filePaths: string[]
@@ -252,6 +261,8 @@ export const mediaApi = {
     api.get<boolean>('/media/folder-exists', { params: { folderPath } }),
   deleteFile: (filePath: string) =>
     api.delete('/media/file', { params: { filePath } }),
+  rename: (path: string, newName: string, merge = false) =>
+    api.post<RenameResponse>('/media/rename', { path, newName, merge }),
   // How many of these a delete would remove for good instead of moving to the recycle bin.
   deleteCheck: (filePaths: string[]) =>
     api.post<number>('/media/delete-check', filePaths),

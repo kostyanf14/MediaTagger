@@ -15,13 +15,16 @@ public class MediaController : ControllerBase
     private readonly TagsService _tags;
     private readonly ThumbnailService _thumbnails;
     private readonly ScanProgress _progress;
+    private readonly MediaRename _rename;
 
-    public MediaController(FileSystemService fs, TagsService tags, ThumbnailService thumbnails, ScanProgress progress)
+    public MediaController(FileSystemService fs, TagsService tags, ThumbnailService thumbnails, ScanProgress progress,
+        MediaRename rename)
     {
         _fs = fs;
         _tags = tags;
         _thumbnails = thumbnails;
         _progress = progress;
+        _rename = rename;
     }
 
     [HttpGet("files")]
@@ -63,6 +66,18 @@ public class MediaController : ControllerBase
     [HttpGet("folder-exists")]
     public ActionResult<bool> FolderExists([FromQuery] string folderPath)
         => Ok(!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath));
+
+    /// <summary>Renames a file or folder. A folder whose new name exists is not touched until <c>merge</c> is set.</summary>
+    [HttpPost("rename")]
+    public ActionResult<RenameResponse> Rename([FromBody] RenameRequest request)
+    {
+        var outcome = _rename.Rename(request.Path, request.NewName ?? "", request.Merge);
+        if (outcome.Code == "merge") return Conflict(new { code = "merge", destination = outcome.Destination });
+        if (outcome.Code == "exists") return Conflict(new { code = "exists", name = outcome.Name });
+        if (outcome.Code == "missing") return NotFound();
+        if (outcome.Code != null) return BadRequest("Invalid name");
+        return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
+    }
 
     [HttpDelete("file")]
     public ActionResult DeleteFile([FromQuery] string filePath)

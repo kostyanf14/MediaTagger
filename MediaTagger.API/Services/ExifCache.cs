@@ -112,6 +112,53 @@ public class ExifCache : IDisposable
         return fresh;
     }
 
+    /// <summary>Points cached metadata at the path a file or folder was renamed to.</summary>
+    public void Retarget(string oldFullPath, string newFullPath)
+    {
+        var from = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(oldFullPath)));
+        var to = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(newFullPath)));
+        if (from.Volume != to.Volume || from.Path == to.Path) return;
+
+        lock (_gate)
+        {
+            var moves = _entries.Keys
+                .Where(k => k.Volume == from.Volume && StoredPath.Covers(k.Path, from.Path))
+                .Select(k => (Old: k.Path, New: StoredPath.Map(k.Path, from.Path, to.Path)))
+                .ToList();
+            if (moves.Count == 0) return;
+
+            using var tx = _connection.BeginTransaction();
+            using var delete = _connection.CreateCommand();
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM exif WHERE volume = $v AND path = $p";
+            using var update = _connection.CreateCommand();
+            update.Transaction = tx;
+            update.CommandText = "UPDATE exif SET path = $n WHERE volume = $v AND path = $o";
+            foreach (var (oldPath, newPath) in moves)
+            {
+                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+                {
+                    delete.Parameters.Clear();
+                    delete.Parameters.AddWithValue("$v", from.Volume);
+                    delete.Parameters.AddWithValue("$p", newPath);
+                    delete.ExecuteNonQuery();
+                }
+                update.Parameters.Clear();
+                update.Parameters.AddWithValue("$n", newPath);
+                update.Parameters.AddWithValue("$v", from.Volume);
+                update.Parameters.AddWithValue("$o", oldPath);
+                update.ExecuteNonQuery();
+            }
+            tx.Commit();
+
+            foreach (var (oldPath, newPath) in moves)
+            {
+                _entries.TryRemove((from.Volume, oldPath), out var entry);
+                _entries[(from.Volume, newPath)] = entry;
+            }
+        }
+    }
+
     private void LoadEntries()
     {
         using var command = _connection.CreateCommand();
