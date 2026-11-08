@@ -103,8 +103,8 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
             <Box>
               <Typography variant="body2">Подвійне клацання на весь екран</Typography>
               <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4}>
-                Подвійне клацання по фото в галереї відкриває його на весь екран. Якщо вимкнути,
-                фото відкривається у вікні перегляду.
+                Подвійне клацання по фото в галереї або по картці обличчя відкриває його на весь екран.
+                Якщо вимкнути, фото відкривається у вікні перегляду.
               </Typography>
             </Box>
           } />

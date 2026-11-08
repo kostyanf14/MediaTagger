@@ -10,9 +10,11 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import StopIcon from '@mui/icons-material/Stop'
 import FaceRetouchingNaturalIcon from '@mui/icons-material/FaceRetouchingNatural'
 import {
-  facesApi, mediaApi, FaceScanStatus, FaceSuggestionsResponse, FaceSuggestion, BulkTagsRequest, THUMB_SIZE
+  facesApi, mediaApi, FaceScanStatus, FaceSuggestionsResponse, FaceSuggestion, BulkTagsRequest,
+  MediaFile, THUMB_SIZE
 } from '../api/client'
 import { FaceAvatar } from './FaceAvatar'
+import { LightboxViewer } from './LightboxViewer'
 
 // Often enough that the counter visibly moves, rare enough to stay out of the scan's way.
 const STATUS_POLL_MS = 1500
@@ -52,6 +54,18 @@ interface Props {
   active: boolean
   /** Fired after suggestions were accepted, with the tags the server added. */
   onTagsAdded: (applied: BulkTagsRequest) => void
+  /** Double-click opens the photo on the whole screen. */
+  doubleClickFullscreen?: boolean
+  closeViewerOnOutsideClick?: boolean
+  copyPhoto?: boolean
+}
+
+function faceFile(item: FaceSuggestion): MediaFile {
+  return {
+    fileName: item.fileName, filePath: item.filePath, relativePath: '',
+    type: item.type, size: 0, modified: '',
+    tags: { people: [], place: '', groups: [], albums: [], notes: '' }
+  }
 }
 
 /** Similarity → how the card is outlined. ArcFace scores above ~0.6 are near-certain. */
@@ -80,15 +94,16 @@ function FaceContext({ item }: { item: FaceSuggestion }) {
   )
 }
 
-function FaceCard({ item, person, onAccept, onReject }: {
+function FaceCard({ item, person, onAccept, onReject, onOpen }: {
   item: FaceSuggestion
   person: string
   onAccept: (person: string, items: FaceSuggestion[]) => void
   onReject: (person: string, items: FaceSuggestion[]) => void
+  onOpen: (item: FaceSuggestion) => void
 }) {
   return (
-    <Box sx={{
-      position: 'relative', width: CARD_SIZE, flexShrink: 0,
+    <Box onDoubleClick={() => onOpen(item)} sx={{
+      position: 'relative', width: CARD_SIZE, flexShrink: 0, cursor: 'pointer',
       '&:hover .face-actions': { opacity: 1 }
     }}>
       <Tooltip title={<FaceContext item={item} />} placement="top" enterDelay={500}
@@ -98,7 +113,7 @@ function FaceCard({ item, person, onAccept, onReject }: {
             sx={{ border: '2px solid', borderColor: scoreColor(item.score) }} />
         </Box>
       </Tooltip>
-      <Box className="face-actions" sx={{
+      <Box className="face-actions" onDoubleClick={e => e.stopPropagation()} sx={{
         position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.5,
         opacity: 0, transition: 'opacity 0.15s'
       }}>
@@ -123,7 +138,10 @@ function FaceCard({ item, person, onAccept, onReject }: {
   )
 }
 
-export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
+export function FacesPanel({
+  roots, refreshKey, active, onTagsAdded, doubleClickFullscreen = true,
+  closeViewerOnOutsideClick, copyPhoto
+}: Props) {
   const [status, setStatus] = useState<FaceScanStatus | null>(null)
   const [data, setData] = useState<FaceSuggestionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -131,6 +149,8 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
   // bring the card back for a moment.
   const [decided, setDecided] = useState<Set<number>>(new Set())
   const [applyingAll, setApplyingAll] = useState(false)
+  const [openFile, setOpenFile] = useState<MediaFile | null>(null)
+  const [openFullscreen, setOpenFullscreen] = useState(false)
   const applyingAllRef = useRef(false)
   const loadedFor = useRef<string | null>(null)
   const scanWasActive = useRef(false)
@@ -393,7 +413,11 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
                     <Box sx={{ display: 'flex', gap: `${CARD_GAP}px` }}>
                       {row.items.map(item => (
                         <FaceCard key={item.faceId} item={item} person={row.person}
-                          onAccept={accept} onReject={reject} />
+                          onAccept={accept} onReject={reject}
+                          onOpen={item => {
+                            setOpenFullscreen(doubleClickFullscreen)
+                            setOpenFile(faceFile(item))
+                          }} />
                       ))}
                     </Box>
                   )}
@@ -403,6 +427,16 @@ export function FacesPanel({ roots, refreshKey, active, onTagsAdded }: Props) {
           </div>
         )}
       </Box>
+      <LightboxViewer
+        file={openFile}
+        files={openFile ? [openFile] : []}
+        onClose={() => setOpenFile(null)}
+        onNavigate={setOpenFile}
+        onOpenTags={() => setOpenFile(null)}
+        fullscreen={openFullscreen}
+        closeOnOutsideClick={closeViewerOnOutsideClick}
+        copyPhoto={copyPhoto}
+      />
     </Box>
   )
 }

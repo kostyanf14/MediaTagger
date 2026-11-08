@@ -761,7 +761,10 @@ export default function App() {
               {/* Faces — suggestions learned from the people already tagged */}
               <Box sx={{ display: tab === 3 ? 'block' : 'none', height: '100%' }}>
                 <FacesPanel roots={libraryRoots} refreshKey={tagsVersion}
-                  active={tab === 3} onTagsAdded={handleTagsSaved} />
+                  active={tab === 3} onTagsAdded={handleTagsSaved}
+                  doubleClickFullscreen={settings.doubleClickFullscreen !== false}
+                  closeViewerOnOutsideClick={!!settings.closeViewerOnOutsideClick}
+                  copyPhoto={settings.copyPhotoOnCtrlC !== false} />
               </Box>
 
               {/* Places — suggested from places already written on photos taken nearby */}
