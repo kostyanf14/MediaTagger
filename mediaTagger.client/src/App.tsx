@@ -713,7 +713,8 @@ export default function App() {
               <Box sx={{ display: tab === 2 ? 'block' : 'none', height: '100%' }}>
                 <MapView roots={mapRoots}
                   refreshKey={tagsVersion} active={tab === 2} onShowInApp={handleShowInApp}
-                  closeViewerOnOutsideClick={!!settings.closeViewerOnOutsideClick} />
+                  closeViewerOnOutsideClick={!!settings.closeViewerOnOutsideClick}
+                  copyPhoto={settings.copyPhotoOnCtrlC !== false} />
               </Box>
 
               {/* Faces — suggestions learned from the people already tagged */}
@@ -749,6 +750,7 @@ export default function App() {
         files={orderedFiles}
         onClose={() => { setLightboxFile(null); setLightboxFullscreen(false) }}
         fullscreen={lightboxFullscreen}
+        copyPhoto={settings.copyPhotoOnCtrlC !== false}
         onNavigate={setLightboxFile}
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
         onDelete={f => setDeleteRequest([f])}

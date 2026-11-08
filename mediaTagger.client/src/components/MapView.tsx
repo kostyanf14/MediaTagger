@@ -127,9 +127,11 @@ interface Props {
   onShowInApp?: (file: MediaFile) => void
   /** A click beside the picture closes the viewer. */
   closeViewerOnOutsideClick?: boolean
+  /** Ctrl+C copies the open photo. */
+  copyPhoto?: boolean
 }
 
-export function MapView({ roots, refreshKey, active, onShowInApp, closeViewerOnOutsideClick }: Props) {
+export function MapView({ roots, refreshKey, active, onShowInApp, closeViewerOnOutsideClick, copyPhoto }: Props) {
   const [files, setFiles] = useState<MediaFile[]>([])
   const [loading, setLoading] = useState(false)
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
@@ -269,6 +271,7 @@ export function MapView({ roots, refreshKey, active, onShowInApp, closeViewerOnO
         onShowInApp={onShowInApp}
         contextLabel={lightboxLabel}
         closeOnOutsideClick={closeViewerOnOutsideClick}
+        copyPhoto={copyPhoto}
       />
     </Box>
   )

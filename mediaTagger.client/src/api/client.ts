@@ -148,6 +148,8 @@ export interface AppSettings {
   closeViewerOnOutsideClick?: boolean
   /** Double-click in the gallery opens the photo on the whole screen. Absent means on. */
   doubleClickFullscreen?: boolean
+  /** Ctrl+C in the viewer copies the open photo. Absent means on. */
+  copyPhotoOnCtrlC?: boolean
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {

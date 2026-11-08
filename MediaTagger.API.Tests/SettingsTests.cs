@@ -62,6 +62,26 @@ public class SettingsTests
         }
         finally { File.Delete(path); }
     }
+
+    [Fact]
+    public void Copy_photo_shortcut_is_on_until_turned_off()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "mt-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, """{ "defaultFolder": "E:\\Photos", "recentFolders": [] }""");
+            var settings = Open(path);
+            Assert.True(settings.Get().CopyPhotoOnCtrlC);
+
+            var updated = settings.Get();
+            updated.CopyPhotoOnCtrlC = false;
+            settings.Save(updated);
+
+            Assert.Contains("\"copyPhotoOnCtrlC\": false", File.ReadAllText(path));
+            Assert.False(Open(path).Get().CopyPhotoOnCtrlC);
+        }
+        finally { File.Delete(path); }
+    }
 }
 
 public class FacePlanTests

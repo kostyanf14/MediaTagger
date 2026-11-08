@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage, clipboard } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -230,6 +230,21 @@ ipcMain.on('reveal-in-explorer', (event, filePath) => {
 
 // Hands the file to whatever the OS uses for it — the escape hatch for videos
 // Chromium cannot decode.
+// A JPEG or PNG from disk pastes into Telegram. HEIC and the rest come back empty,
+// and the page sends a PNG it decoded through the thumbnail API instead.
+ipcMain.handle('copy-image', (_event, { filePath, dataUrl } = {}) => {
+  let image = nativeImage.createEmpty()
+  if (filePath && fs.existsSync(filePath)) {
+    try { image = nativeImage.createFromPath(filePath) } catch { image = nativeImage.createEmpty() }
+  }
+  if (image.isEmpty() && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+    try { image = nativeImage.createFromDataURL(dataUrl) } catch { image = nativeImage.createEmpty() }
+  }
+  if (image.isEmpty()) return false
+  clipboard.writeImage(image)
+  return true
+})
+
 ipcMain.on('open-file', (event, filePath) => {
   shell.openPath(filePath).then(err => {
     // Resolves with a non-empty string when nothing could open the file.

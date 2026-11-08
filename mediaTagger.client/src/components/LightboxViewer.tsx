@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
-  Box, IconButton, Typography, Backdrop, Fade, Chip, Tooltip, Button
+  Box, IconButton, Typography, Backdrop, Fade, Chip, Tooltip, Button, Snackbar
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
@@ -44,6 +44,8 @@ interface Props {
   closeOnOutsideClick?: boolean
   /** Take the whole screen while this photo is open. */
   fullscreen?: boolean
+  /** Ctrl+C copies the open photo. Absent means on. */
+  copyPhoto?: boolean
   /** A dialog is open on top; the keys are its, not the viewer's. */
   paused?: boolean
 }
@@ -65,9 +67,12 @@ function pictureRect(img: HTMLImageElement) {
 
 export function LightboxViewer({
   file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete,
-  closeOnOutsideClick, fullscreen, paused
+  closeOnOutsideClick, fullscreen, copyPhoto = true, paused
 }: Props) {
-  const { revealInExplorer, openFile, isElectron } = useElectron()
+  const { revealInExplorer, openFile, isElectron, copyPhoto: copyPhotoToClipboard } = useElectron()
+  const copyPhotoRef = useRef(copyPhotoToClipboard)
+  copyPhotoRef.current = copyPhotoToClipboard
+  const [copyNote, setCopyNote] = useState<string | null>(null)
   // Set when the <video> element gives up on the file's codec.
   const [videoError, setVideoError] = useState(false)
   const [view, setView] = useState({ zoom: MIN_ZOOM, x: 0, y: 0 })
@@ -183,6 +188,15 @@ export function LightboxViewer({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!file || paused) return
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && copyPhoto && file.type === 'image') {
+        const target = e.target as HTMLElement | null
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return
+        e.preventDefault()
+        copyPhotoRef.current(file.filePath)
+          .then(() => setCopyNote('Фото скопійовано'))
+          .catch(() => setCopyNote('Не вдалося скопіювати фото'))
+        return
+      }
       if (e.key === 'Escape') onClose()
       if (e.key === 'Delete' && onDelete) onDelete(file)
       if (e.key === 'ArrowLeft') goPrev()
@@ -193,7 +207,7 @@ export function LightboxViewer({
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [file, paused, goPrev, goNext, onClose, onDelete, zoomBy, resetZoom])
+  }, [file, paused, copyPhoto, goPrev, goNext, onClose, onDelete, zoomBy, resetZoom])
 
   /**
    * With the setting on, a click on the dark area closes the viewer. Clicks on the
@@ -357,6 +371,14 @@ export function LightboxViewer({
               <CloseIcon />
             </IconButton>
           </Box>
+
+          <Snackbar
+            open={!!copyNote}
+            autoHideDuration={2000}
+            onClose={() => setCopyNote(null)}
+            message={copyNote}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          />
 
           {/* Media */}
           <Box ref={mediaRef} sx={{
