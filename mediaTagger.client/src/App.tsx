@@ -98,6 +98,7 @@ export default function App() {
   const [files, setFiles] = useState<MediaFile[]>([])
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [lightboxFile, setLightboxFile] = useState<MediaFile | null>(null)
+  const [lightboxFullscreen, setLightboxFullscreen] = useState(false)
   // Files waiting for the delete confirmation, from wherever it was asked for.
   const [deleteRequest, setDeleteRequest] = useState<MediaFile[] | null>(null)
   const [allTags, setAllTags] = useState<AllTagsResponse>({ people: [], groups: [], albums: [], places: [] })
@@ -694,7 +695,10 @@ export default function App() {
                   onSortField={setSortField} onSortDir={setSortDir} onGroupBy={setGroupBy}
                   selectedPaths={selectedPaths}
                   onSelectionChange={setSelectedPaths}
-                  onDoubleClick={setLightboxFile}
+                  onDoubleClick={file => {
+                    setLightboxFullscreen(settings.doubleClickFullscreen !== false)
+                    setLightboxFile(file)
+                  }}
                   onDelete={file => setDeleteRequest([file])}
                 />
               </Box>
@@ -743,7 +747,8 @@ export default function App() {
       <LightboxViewer
         file={lightboxFile}
         files={orderedFiles}
-        onClose={() => setLightboxFile(null)}
+        onClose={() => { setLightboxFile(null); setLightboxFullscreen(false) }}
+        fullscreen={lightboxFullscreen}
         onNavigate={setLightboxFile}
         onOpenTags={f => { setSelectedPaths([f.filePath]); setLightboxFile(null) }}
         onDelete={f => setDeleteRequest([f])}

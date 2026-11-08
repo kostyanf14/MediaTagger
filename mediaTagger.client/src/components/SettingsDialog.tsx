@@ -94,6 +94,20 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
               </Typography>
             </Box>
           } />
+        <FormControlLabel sx={{ mt: 1, alignItems: 'flex-start', '& .MuiSwitch-root': { mt: -0.5 } }}
+          control={
+            <Switch size="small" checked={settings.doubleClickFullscreen !== false}
+              onChange={e => save({ doubleClickFullscreen: e.target.checked })} />
+          }
+          label={
+            <Box>
+              <Typography variant="body2">Подвійне клацання на весь екран</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4}>
+                Подвійне клацання по фото в галереї відкриває його на весь екран. Якщо вимкнути,
+                фото відкривається у вікні перегляду.
+              </Typography>
+            </Box>
+          } />
 
         <Divider sx={{ my: 2 }} />
 

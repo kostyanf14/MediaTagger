@@ -42,6 +42,8 @@ interface Props {
   onDelete?: (file: MediaFile) => void
   /** A click beside the picture closes the viewer. */
   closeOnOutsideClick?: boolean
+  /** Take the whole screen while this photo is open. */
+  fullscreen?: boolean
   /** A dialog is open on top; the keys are its, not the viewer's. */
   paused?: boolean
 }
@@ -62,7 +64,8 @@ function pictureRect(img: HTMLImageElement) {
 }
 
 export function LightboxViewer({
-  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, closeOnOutsideClick, paused
+  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete,
+  closeOnOutsideClick, fullscreen, paused
 }: Props) {
   const { revealInExplorer, openFile, isElectron } = useElectron()
   // Set when the <video> element gives up on the file's codec.
@@ -74,6 +77,7 @@ export function LightboxViewer({
   // Held so the browser does not drop the neighbours' downloads half-way.
   const preloaded = useRef<HTMLImageElement[]>([])
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const mediaRef = useRef<HTMLDivElement | null>(null)
   const panStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   // Where the last press went down, to tell a click from the end of a pan.
@@ -122,6 +126,18 @@ export function LightboxViewer({
   const goNext = useCallback(() => {
     if (currentIndex < files.length - 1) onNavigate(files[currentIndex + 1])
   }, [currentIndex, files, onNavigate])
+
+  // The gallery asks for the whole screen. Leaving it on while stepping through
+  // photos, and dropping it when the viewer closes.
+  const open = !!file
+  useEffect(() => {
+    const shell = shellRef.current
+    if (!open || !fullscreen || !shell) return
+    shell.requestFullscreen?.().catch(() => {})
+    return () => {
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {})
+    }
+  }, [open, fullscreen])
 
   // A new file deserves a fresh attempt at the built-in player, at 100%.
   useEffect(() => {
@@ -211,11 +227,12 @@ export function LightboxViewer({
     >
       <Fade in={!!file}>
         <Box
+          ref={shellRef}
           onClick={handleBackgroundClick}
           onPointerDownCapture={e => { pressedAt.current = { x: e.clientX, y: e.clientY } }}
           sx={{
             position: 'relative', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', width: '100vw', height: '100vh'
+            alignItems: 'center', width: '100vw', height: '100vh', bgcolor: '#000'
           }}
         >
           {/* Top bar */}

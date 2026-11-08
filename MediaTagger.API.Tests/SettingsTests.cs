@@ -42,6 +42,26 @@ public class SettingsTests
         }
         finally { File.Delete(path); }
     }
+
+    [Fact]
+    public void Double_click_fullscreen_is_on_until_turned_off()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "mt-settings-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, """{ "defaultFolder": "E:\\Photos", "recentFolders": [] }""");
+            var settings = Open(path);
+            Assert.True(settings.Get().DoubleClickFullscreen);
+
+            var updated = settings.Get();
+            updated.DoubleClickFullscreen = false;
+            settings.Save(updated);
+
+            Assert.Contains("\"doubleClickFullscreen\": false", File.ReadAllText(path));
+            Assert.False(Open(path).Get().DoubleClickFullscreen);
+        }
+        finally { File.Delete(path); }
+    }
 }
 
 public class FacePlanTests

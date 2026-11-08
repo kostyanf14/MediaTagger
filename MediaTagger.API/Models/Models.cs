@@ -18,6 +18,8 @@ public class AppSettings
     public string DefaultPhotographer { get; set; } = "";
     /// <summary>A click beside the picture closes the viewer, not only the close button or Esc.</summary>
     public bool CloseViewerOnOutsideClick { get; set; }
+    /// <summary>A double-click in the gallery opens the photo on the whole screen. Off keeps the viewer inside the window.</summary>
+    public bool DoubleClickFullscreen { get; set; } = true;
 }
 
 /// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>

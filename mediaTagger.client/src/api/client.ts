@@ -146,6 +146,8 @@ export interface AppSettings {
   defaultPhotographer?: string
   /** A click beside the picture closes the viewer. */
   closeViewerOnOutsideClick?: boolean
+  /** Double-click in the gallery opens the photo on the whole screen. Absent means on. */
+  doubleClickFullscreen?: boolean
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {
