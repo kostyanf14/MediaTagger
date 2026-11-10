@@ -167,6 +167,12 @@ export interface RenameResponse {
   merged: boolean
   settings: AppSettings
 }
+export interface SortByDateResponse {
+  moved: number
+  skipped: number
+  undated: number
+  settings: AppSettings
+}
 export interface BulkTagsRequest {
   filePaths: string[]
   people: string[]
@@ -265,6 +271,8 @@ export const mediaApi = {
     api.post<RenameResponse>('/media/rename', { path, newName, merge }),
   move: (path: string, destination: string, merge = false) =>
     api.post<RenameResponse>('/media/move', { path, destination, merge }),
+  sortByDate: (path: string) =>
+    api.post<SortByDateResponse>('/media/sort-by-date', { path }),
   // How many of these a delete would remove for good instead of moving to the recycle bin.
   deleteCheck: (filePaths: string[]) =>
     api.post<number>('/media/delete-check', filePaths),

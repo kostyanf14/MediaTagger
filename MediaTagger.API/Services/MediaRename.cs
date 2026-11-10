@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using MediaTagger.API.Models;
 
 namespace MediaTagger.API.Services;
@@ -13,6 +15,16 @@ public sealed class RenameOutcome
     public string? Destination { get; init; }
 }
 
+public sealed class SortOutcome
+{
+    public int Moved { get; init; }
+    public int Skipped { get; init; }
+    /// <summary>How many of <see cref="Moved"/> had no date and went into 0000.</summary>
+    public int Undated { get; init; }
+    public AppSettings? Settings { get; init; }
+    public string? Code { get; init; }
+}
+
 /// <summary>
 /// Renames a photo or a folder and moves every stored reference onto the new path:
 /// tag files, the face database, the metadata cache, and the remembered folders.
@@ -24,14 +36,17 @@ public class MediaRename
     private readonly TagsService _tags;
     private readonly FaceStore _faces;
     private readonly ExifCache _exif;
+    private readonly ExifService _exifReader;
     private readonly SettingsService _settings;
     private readonly FileSystemService _fs;
 
-    public MediaRename(TagsService tags, FaceStore faces, ExifCache exif, SettingsService settings, FileSystemService fs)
+    public MediaRename(TagsService tags, FaceStore faces, ExifCache exif, ExifService exifReader,
+        SettingsService settings, FileSystemService fs)
     {
         _tags = tags;
         _faces = faces;
         _exif = exif;
+        _exifReader = exifReader;
         _settings = settings;
         _fs = fs;
     }
@@ -75,13 +90,138 @@ public class MediaRename
 
         var parent = Path.GetDirectoryName(source);
         if (string.IsNullOrEmpty(parent)) return new RenameOutcome { Code = "invalid" };
-        if (parent.Equals(destination, StringComparison.OrdinalIgnoreCase))
+        if (StoredPath.Same(parent, destination))
             return new RenameOutcome { Path = source, Settings = _settings.Get() };
 
         // A folder cannot be moved into itself.
-        if (isDir && IsUnder(destination, source)) return new RenameOutcome { Code = "invalid" };
+        if (isDir && StoredPath.IsUnder(destination, source)) return new RenameOutcome { Code = "invalid" };
 
         return Relocate(source, Path.Combine(destination, Path.GetFileName(source)), merge, isDir);
+    }
+
+    /// <summary>
+    /// Puts every photo and video under <paramref name="rawFolder"/> into year/month folders.
+    /// The date is the saved capture date, then the file's metadata, then a name like
+    /// IMG_20191006_142317, and otherwise the file goes into 0000. A name already in the
+    /// destination stays put.
+    /// </summary>
+    public SortOutcome SortByDate(string rawFolder)
+    {
+        string root;
+        try { root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawFolder)); }
+        catch { return new SortOutcome { Code = "invalid" }; }
+        if (!Directory.Exists(root)) return new SortOutcome { Code = "missing" };
+
+        var tagsByFolder = new Dictionary<string, TagsFile>(StoredPath.Comparer);
+        var planned = new List<(string Source, string Dest, bool Undated)>();
+        var reserved = new HashSet<string>(StoredPath.Comparer);
+        var skipped = 0;
+        foreach (var file in MediaUnder(root))
+        {
+            var folder = Path.GetDirectoryName(file) ?? "";
+            if (!tagsByFolder.TryGetValue(folder, out var tags))
+                tagsByFolder[folder] = tags = _tags.ReadTagsFile(folder);
+            var date = CaptureDate(file, tags);
+            var destDir = date == null
+                ? Path.Combine(root, "0000")
+                : Path.Combine(root, date.Value.Year.ToString("D4"), date.Value.Month.ToString("D2"));
+            var dest = Path.Combine(destDir, Path.GetFileName(file));
+            if (StoredPath.Same(Path.GetFullPath(file), Path.GetFullPath(dest)))
+                continue;
+            if (File.Exists(dest) || !reserved.Add(dest)) { skipped++; continue; }
+            planned.Add((file, dest, date == null));
+        }
+
+        var done = new List<(string Source, string Dest, bool Undated)>();
+        Exception? failure = null;
+        foreach (var item in planned)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(item.Dest)!);
+                File.Move(item.Source, item.Dest);
+                done.Add(item);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failure = ex;
+                break;
+            }
+        }
+        if (done.Count > 0)
+        {
+            var pairs = done.Select(m => (m.Source, m.Dest)).ToList();
+            _tags.MoveFileEntries(pairs);
+            _faces.RetargetAll(pairs);
+            _exif.RetargetAll(pairs);
+            foreach (var dir in done.SelectMany(m => new[]
+                {
+                    Path.GetDirectoryName(m.Source) ?? "",
+                    Path.GetDirectoryName(m.Dest) ?? ""
+                }).Distinct(StoredPath.Comparer))
+                if (dir.Length > 0) _fs.InvalidateFolder(dir);
+        }
+        if (failure != null) throw failure;
+
+        return new SortOutcome
+        {
+            Moved = done.Count,
+            Skipped = skipped,
+            Undated = done.Count(m => m.Undated),
+            Settings = _settings.Get()
+        };
+    }
+
+    /// <summary>The first YYYYMMDD in the name that is a real date, as in IMG_20191006_142317.</summary>
+    public static DateTime? DateFromFileName(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        foreach (Match match in FileDate.Matches(name))
+        {
+            if (DateTime.TryParseExact(match.Value, "yyyyMMdd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var date))
+                return date;
+        }
+        return null;
+    }
+
+    private static readonly Regex FileDate = new(@"(?<!\d)(?:19|20)\d{6}(?!\d)", RegexOptions.Compiled);
+
+    private DateTime? CaptureDate(string file, TagsFile tags)
+    {
+        var name = Path.GetFileName(file);
+        var key = tags.Files.Keys.FirstOrDefault(k => k.Equals(name, StoredPath.Comparison));
+        if (key != null && tags.Files[key].DateTaken != null) return tags.Files[key].DateTaken;
+        var info = new FileInfo(file);
+        return _exif.GetOrRead(file, info, _exifReader.ReadExif)?.DateTaken ?? DateFromFileName(info.Name);
+    }
+
+    private static List<string> MediaUnder(string root)
+    {
+        var files = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
+        {
+            var dir = pending.Pop();
+            IEnumerable<string> entries;
+            try { entries = Directory.EnumerateFileSystemEntries(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+
+            foreach (var entry in entries)
+            {
+                FileAttributes attr;
+                try { attr = File.GetAttributes(entry); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+
+                if ((attr & FileAttributes.Directory) != 0)
+                {
+                    if ((attr & FileAttributes.ReparsePoint) == 0) pending.Push(entry);
+                }
+                else if (LibraryIndex.IsMediaFile(entry)) files.Add(entry);
+            }
+        }
+        return files;
     }
 
     private RenameOutcome Relocate(string source, string dest, bool merge, bool isDir)
@@ -90,7 +230,7 @@ public class MediaRename
         var currentName = Path.GetFileName(source);
         var newName = Path.GetFileName(dest);
         var caseOnly = currentName.Equals(newName, StringComparison.OrdinalIgnoreCase)
-            && Path.GetDirectoryName(dest)!.Equals(parent, StringComparison.OrdinalIgnoreCase);
+            && StoredPath.Same(Path.GetDirectoryName(dest)!, parent);
         var merged = false;
 
         // shortcut: a case-only change on a case-sensitive disk is treated as the same
@@ -202,14 +342,6 @@ public class MediaRename
     {
         if (directory) Directory.Move(source, dest);
         else File.Move(source, dest);
-    }
-
-    private static bool IsUnder(string path, string root)
-    {
-        if (path.Equals(root, StringComparison.OrdinalIgnoreCase)) return true;
-        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
-        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirectory(string path)

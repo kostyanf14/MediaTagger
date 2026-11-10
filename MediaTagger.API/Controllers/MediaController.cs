@@ -91,6 +91,22 @@ public class MediaController : ControllerBase
         return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
     }
 
+    /// <summary>Sorts the photos and videos under a folder into year/month, or 0000 when no date can be found.</summary>
+    [HttpPost("sort-by-date")]
+    public ActionResult<SortByDateResponse> SortByDate([FromBody] SortByDateRequest request)
+    {
+        var outcome = _rename.SortByDate(request.Path);
+        if (outcome.Code == "missing") return NotFound();
+        if (outcome.Code != null) return BadRequest("Invalid folder");
+        return Ok(new SortByDateResponse
+        {
+            Moved = outcome.Moved,
+            Skipped = outcome.Skipped,
+            Undated = outcome.Undated,
+            Settings = outcome.Settings!
+        });
+    }
+
     [HttpDelete("file")]
     public ActionResult DeleteFile([FromQuery] string filePath)
     {

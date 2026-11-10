@@ -6,6 +6,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import { FolderNode } from '../api/client'
 
 interface Props {
@@ -14,10 +15,11 @@ interface Props {
   onSelect: (path: string) => void
   onRename: (node: FolderNode) => void
   onMove: (node: FolderNode) => void
+  onSort: (node: FolderNode) => void
   depth?: number
 }
 
-export function FolderTreeNode({ node, selectedPath, onSelect, onRename, onMove, depth = 0 }: Props) {
+export function FolderTreeNode({ node, selectedPath, onSelect, onRename, onMove, onSort, depth = 0 }: Props) {
   const [expanded, setExpanded] = useState(depth === 0)
   const isSelected = selectedPath === node.path
   const hasChildren = node.children.length > 0
@@ -76,6 +78,16 @@ export function FolderTreeNode({ node, selectedPath, onSelect, onRename, onMove,
             <DriveFileMoveIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Tooltip>
+        <Tooltip title="Розкласти за датою (рік/місяць)">
+          <IconButton
+            className="row-btn"
+            size="small"
+            onClick={e => { e.stopPropagation(); onSort(node) }}
+            sx={{ p: 0.25, opacity: isSelected ? 1 : 0, color: isSelected ? 'inherit' : 'text.secondary' }}
+          >
+            <CalendarMonthIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Перейменувати папку">
           <IconButton
             className="row-btn"
@@ -98,6 +110,7 @@ export function FolderTreeNode({ node, selectedPath, onSelect, onRename, onMove,
               onSelect={onSelect}
               onRename={onRename}
               onMove={onMove}
+              onSort={onSort}
               depth={depth + 1}
             />
           ))}

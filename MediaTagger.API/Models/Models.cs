@@ -265,6 +265,19 @@ public class MoveRequest
     public bool Merge { get; set; }
 }
 
+public class SortByDateRequest
+{
+    public string Path { get; set; } = "";
+}
+
+public class SortByDateResponse
+{
+    public int Moved { get; set; }
+    public int Skipped { get; set; }
+    public int Undated { get; set; }
+    public AppSettings Settings { get; set; } = new();
+}
+
 public class RenamePeopleRequest
 {
     public List<string> RootPaths { get; set; } = new();

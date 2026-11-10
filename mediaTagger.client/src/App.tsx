@@ -24,13 +24,13 @@ import { LibraryPanel } from './components/LibraryPanel'
 import { LightboxViewer } from './components/LightboxViewer'
 import { DeleteFilesDialog } from './components/DeleteFilesDialog'
 import { RenameDialog, RenameTarget } from './components/RenameDialog'
-import { MoveDialog, MoveTarget } from './components/MoveDialog'
+import { MoveDialog, MoveTarget, SortFolderDialog } from './components/MoveDialog'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import {
   mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress, RenameResponse,
-  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest,
+  MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest, SortByDateResponse,
   checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
@@ -122,6 +122,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null)
+  const [sortFolder, setSortFolder] = useState<{ path: string; name: string } | null>(null)
   // Browsing a folder includes everything below it unless the user says otherwise.
   const [recursive, setRecursive] = useState(true)
   const [scan, setScan] = useState<ScanProgress | null>(null)
@@ -403,6 +404,17 @@ export default function App() {
     markTagsChanged()
   }
 
+  const handleSorted = (result: SortByDateResponse) => {
+    setSettings(result.settings)
+    setSortFolder(null)
+    setLightboxFile(null)
+    if (rootPath) loadFolderTree(rootPath).catch(() => {})
+    if (currentFolder) void loadFiles(currentFolder)
+    const roots = result.settings.libraryFolders?.length ? result.settings.libraryFolders : libraryRoots
+    loadAllTags(roots)
+    markTagsChanged()
+  }
+
   // Delete in the gallery asks to delete whatever is selected. The viewer handles its
   // own Delete, and a key pressed while typing belongs to the field.
   useEffect(() => {
@@ -673,7 +685,8 @@ export default function App() {
               <FolderTreeNode node={folderTree} selectedPath={currentFolder}
                 onSelect={path => { setCurrentFolder(path); loadFiles(path) }}
                 onRename={node => setRenameTarget({ path: node.path, name: node.name, kind: 'folder' })}
-                onMove={node => setMoveTarget({ path: node.path, name: node.name, kind: 'folder' })} />
+                onMove={node => setMoveTarget({ path: node.path, name: node.name, kind: 'folder' })}
+                onSort={node => setSortFolder({ path: node.path, name: node.name })} />
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ p: 2, display: 'block' }}>
                 Оберіть кореневу папку з медіафайлами
@@ -815,7 +828,7 @@ export default function App() {
         onRename={f => setRenameTarget({ path: f.filePath, name: f.fileName, kind: 'file' })}
         onMove={f => setMoveTarget({ path: f.filePath, name: f.fileName, kind: 'file' })}
         closeOnOutsideClick={!!settings.closeViewerOnOutsideClick}
-        paused={!!deleteRequest || !!renameTarget || !!moveTarget}
+        paused={!!deleteRequest || !!renameTarget || !!moveTarget || !!sortFolder}
       />
 
       <DeleteFilesDialog files={deleteRequest} onCancel={() => setDeleteRequest(null)} onDeleted={handleDeleted} />
@@ -824,6 +837,8 @@ export default function App() {
 
       <MoveDialog target={moveTarget} onCancel={() => setMoveTarget(null)}
         onMoved={(oldPath, result) => { setMoveTarget(null); void handleRenamed(oldPath, result) }} />
+
+      <SortFolderDialog folder={sortFolder} onCancel={() => setSortFolder(null)} onSorted={handleSorted} />
 
       <SettingsDialog open={settingsOpen} settings={settings} people={allTags.people}
         onChange={saveSettings} onClose={() => setSettingsOpen(false)} />

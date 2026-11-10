@@ -1,3 +1,4 @@
+using ImageMagick;
 using MediaTagger.API.Models;
 using MediaTagger.API.Services;
 using Microsoft.Extensions.Configuration;
@@ -25,6 +26,13 @@ public class StoredPathTests
         var moved = StoredPath.MapFull(@"E:\Photos\Trip\a.jpg", @"e:\photos\trip", @"E:\Photos\Holiday");
         Assert.Equal(@"E:\Photos\Holiday\a.jpg", moved);
         Assert.Null(StoredPath.MapFull(@"E:\Photos\Trip2", @"E:\Photos\Trip", @"E:\Photos\Holiday"));
+    }
+
+    [Fact]
+    public void Case_difference_is_the_same_path_only_on_windows()
+    {
+        Assert.Equal(!OperatingSystem.IsLinux(), StoredPath.Same(@"C:\photos\inbox", @"C:\photos\Inbox"));
+        Assert.Equal(!OperatingSystem.IsLinux(), StoredPath.IsUnder(@"C:\photos\trip", @"C:\photos\Trip"));
     }
 }
 
@@ -221,6 +229,140 @@ public class RenameTests
         Assert.True(File.Exists(Path.Combine(into, "Trip", "a.jpg")));
     }
 
+    [Fact]
+    public void Retarget_follows_a_file_onto_another_volume()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var world = new RenameWorld();
+        var folder = world.Dir("album");
+        var file = Path.Combine(folder, "a.jpg");
+        File.WriteAllBytes(file, new byte[] { 1, 2, 3 });
+        var info = new FileInfo(file);
+        world.Faces.Save(file, info.Length, info.LastWriteTimeUtc.Ticks, 1, 4, 4,
+            new[] { new DetectedFace(0.2f, 0.2f, 0.3f, 0.3f, 1, new[] { 1f }) });
+        world.Exif.GetOrRead(file, info, _ => new ExifData { Camera = "Cam" });
+
+        var dest = @"\\server-b\share\a.jpg";
+        world.Faces.Retarget(file, dest);
+        world.Exif.Retarget(file, dest);
+
+        Assert.NotNull(world.Faces.TryGet(dest, info.Length, info.LastWriteTimeUtc.Ticks));
+        Assert.Null(world.Faces.TryGet(file, info.Length, info.LastWriteTimeUtc.Ticks));
+        var exif = world.Exif.GetOrRead(dest, info, _ => throw new InvalidOperationException("cache miss"));
+        Assert.Equal("Cam", exif!.Camera);
+    }
+
+    [Fact]
+    public void A_file_name_date_is_the_eight_digits_before_the_time()
+    {
+        Assert.Equal(new DateTime(2019, 10, 6), MediaRename.DateFromFileName("IMG_20191006_142317.jpg"));
+        Assert.Equal(new DateTime(2019, 10, 6), MediaRename.DateFromFileName("IMG-20191006-WA0001.jpg"));
+        Assert.Null(MediaRename.DateFromFileName("IMG_142317.jpg"));
+        Assert.Null(MediaRename.DateFromFileName("IMG_20191340.jpg"));
+    }
+
+    [Fact]
+    public void Sorting_uses_metadata_then_the_file_name_then_0000()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("library");
+        var trip = Path.Combine(root, "trip");
+        Directory.CreateDirectory(trip);
+
+        var named = Path.Combine(trip, "IMG_20191006_142317.jpg");
+        File.WriteAllBytes(named, new byte[] { 1 });
+        File.WriteAllText(Path.Combine(trip, "_tags.json"), """
+            { "files": { "IMG_20191006_142317.jpg": { "people": ["Анна"], "groups": [], "albums": [], "place": "", "notes": "" } } }
+            """);
+
+        var dated = Path.Combine(root, "IMG_20180101_000000.jpg");
+        using (var image = new MagickImage(MagickColors.White, 8, 8))
+        {
+            var profile = new ExifProfile();
+            profile.SetValue(ExifTag.DateTimeOriginal, "2019:10:06 14:23:17");
+            image.SetProfile(profile);
+            image.Write(dated);
+        }
+
+        var plain = Path.Combine(root, "note.jpg");
+        File.WriteAllBytes(plain, new byte[] { 2 });
+        var clash = Path.Combine(root, "other", "note.jpg");
+        Directory.CreateDirectory(Path.GetDirectoryName(clash)!);
+        File.WriteAllBytes(clash, new byte[] { 3 });
+
+        var outcome = world.Rename.SortByDate(root);
+
+        Assert.Null(outcome.Code);
+        Assert.Equal(3, outcome.Moved);
+        Assert.Equal(1, outcome.Undated);
+        Assert.Equal(1, outcome.Skipped);
+        Assert.True(File.Exists(Path.Combine(root, "2019", "10", "IMG_20191006_142317.jpg")));
+        Assert.True(File.Exists(Path.Combine(root, "2019", "10", "IMG_20180101_000000.jpg")));
+        Assert.True(File.Exists(Path.Combine(root, "0000", "note.jpg")));
+        Assert.Equal(1, (File.Exists(plain) ? 1 : 0) + (File.Exists(clash) ? 1 : 0));
+        Assert.Equal(new[] { "Анна" },
+            world.Tags.ReadTagsFile(Path.Combine(root, "2019", "10")).Files["IMG_20191006_142317.jpg"].People);
+    }
+
+    [Fact]
+    public void Sorting_one_folder_moves_every_uniquely_named_photo()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("flat");
+        for (var i = 0; i < 12; i++)
+            File.WriteAllBytes(Path.Combine(root, $"IMG_20191006_1423{i:00}.jpg"), new byte[] { 1 });
+
+        var outcome = world.Rename.SortByDate(root);
+
+        Assert.Equal(12, outcome.Moved);
+        Assert.Equal(0, outcome.Skipped);
+        Assert.Empty(Directory.GetFiles(root));
+        Assert.Equal(12, Directory.GetFiles(Path.Combine(root, "2019", "10")).Length);
+    }
+
+    [Fact]
+    public void Sorting_ignores_synology_thumbnail_and_recycle_copies()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("nas");
+        File.WriteAllBytes(Path.Combine(root, "IMG_20191006_142317.jpg"), new byte[] { 1 });
+        var thumbDir = Path.Combine(root, "@eaDir", "IMG_20191006_142317.jpg");
+        Directory.CreateDirectory(thumbDir);
+        File.WriteAllBytes(Path.Combine(thumbDir, "SYNOFILE_THUMB_M.jpg"), new byte[] { 2 });
+        var recycle = Path.Combine(root, "#recycle");
+        Directory.CreateDirectory(recycle);
+        File.WriteAllBytes(Path.Combine(recycle, "IMG_20191006_142317.jpg"), new byte[] { 3 });
+
+        var outcome = world.Rename.SortByDate(root);
+
+        Assert.Equal(1, outcome.Moved);
+        Assert.Equal(0, outcome.Skipped);
+        Assert.True(File.Exists(Path.Combine(root, "2019", "10", "IMG_20191006_142317.jpg")));
+        Assert.True(File.Exists(Path.Combine(thumbDir, "SYNOFILE_THUMB_M.jpg")));
+        Assert.Equal(new byte[] { 3 }, File.ReadAllBytes(Path.Combine(recycle, "IMG_20191006_142317.jpg")));
+    }
+
+    [Fact]
+    public void Sorting_uses_a_saved_capture_date_before_the_file_name()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("dated");
+        const string name = "IMG_20180101_000000.jpg";
+        File.WriteAllBytes(Path.Combine(root, name), new byte[] { 1 });
+        File.WriteAllText(Path.Combine(root, "_tags.json"), """
+            { "files": { "IMG_20180101_000000.jpg": {
+                "people": ["Анна"], "groups": [], "albums": [], "place": "", "notes": "",
+                "dateTaken": "2019-10-06T00:00:00" } } }
+            """);
+
+        var outcome = world.Rename.SortByDate(root);
+
+        Assert.Equal(1, outcome.Moved);
+        Assert.Equal(0, outcome.Undated);
+        Assert.True(File.Exists(Path.Combine(root, "2019", "10", name)));
+        Assert.Equal(new[] { "Анна" }, world.Tags.ReadTagsFile(Path.Combine(root, "2019", "10")).Files[name].People);
+    }
+
     private sealed class RenameWorld : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "mt-rename-" + Guid.NewGuid().ToString("N"));
@@ -244,7 +386,7 @@ public class RenameTests
             Exif = new ExifCache(locator, NullLogger<ExifCache>.Instance);
             Settings = new SettingsService(config, NullLogger<SettingsService>.Instance);
             var index = new LibraryIndex(Tags, new ExifService(), Exif, new ScanProgress(), NullLogger<LibraryIndex>.Instance);
-            Rename = new MediaRename(Tags, Faces, Exif, Settings, new FileSystemService(index));
+            Rename = new MediaRename(Tags, Faces, Exif, new ExifService(), Settings, new FileSystemService(index));
         }
 
         public string Dir(string name)

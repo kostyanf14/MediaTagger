@@ -3,7 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Typography, Box
 } from '@mui/material'
 import axios from 'axios'
-import { mediaApi, RenameResponse } from '../api/client'
+import { mediaApi, RenameResponse, SortByDateResponse } from '../api/client'
 import { useElectron } from '../hooks/useElectron'
 
 export interface MoveTarget {
@@ -96,6 +96,68 @@ export function MoveDialog({ target, onCancel, onMoved }: Props) {
           <Button variant="contained" disabled={busy || !destination.trim()} onClick={() => void submit(false)}>
             Перемістити
           </Button>
+        )}
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+/** Sorts every photo and video under a folder into year/month, or 0000 when no date is found. */
+export function SortFolderDialog({ folder, onCancel, onSorted }: {
+  folder: { path: string; name: string } | null
+  onCancel: () => void
+  onSorted: (result: SortByDateResponse) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<SortByDateResponse | null>(null)
+
+  useEffect(() => {
+    setBusy(false)
+    setError('')
+    setResult(null)
+  }, [folder])
+
+  const run = async () => {
+    if (!folder) return
+    setBusy(true)
+    setError('')
+    try {
+      const res = await mediaApi.sortByDate(folder.path)
+      setResult(res.data)
+    } catch {
+      setError('Не вдалося розкласти фото')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!folder} onClose={busy ? undefined : () => (result ? onSorted(result) : onCancel())} maxWidth="xs" fullWidth>
+      <DialogTitle>Розкласти «{folder?.name}» за датою</DialogTitle>
+      <DialogContent>
+        {result ? (
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Переміщено {result.moved}. Без дати, у папку 0000: {result.undated}.
+            Пропущено, бо така назва вже є: {result.skipped}.
+          </Typography>
+        ) : (
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Усі фото і відео в цій папці та її підпапках переїдуть у папки рік/місяць,
+            наприклад 2019/10. Дата береться з метаданих, якщо їх немає — з назви на кшталт
+            IMG_20191006_142317, інакше файл потрапляє в 0000.
+          </Typography>
+        )}
+        {error && <Typography variant="body2" color="error" sx={{ mt: 1 }}>{error}</Typography>}
+      </DialogContent>
+      <DialogActions>
+        {result ? (
+          <Button variant="contained" onClick={() => onSorted(result)}>Закрити</Button>
+        ) : (
+          <>
+            <Button onClick={onCancel} disabled={busy}>Скасувати</Button>
+            <Button variant="contained" disabled={busy} onClick={() => void run()}>Розкласти</Button>
+          </>
         )}
       </DialogActions>
     </Dialog>
