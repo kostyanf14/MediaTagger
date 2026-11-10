@@ -216,13 +216,22 @@ public class MediaRename
 
                 if ((attr & FileAttributes.Directory) != 0)
                 {
-                    if ((attr & FileAttributes.ReparsePoint) == 0) pending.Push(entry);
+                    // Synology keeps thumbnails and recycle copies in @eaDir and #recycle,
+                    // with the same file names as the photos. Walking them counts those
+                    // copies as "name already exists" and hides them from the folder view.
+                    var name = Path.GetFileName(entry);
+                    if ((attr & FileAttributes.ReparsePoint) == 0 && !IsHiddenSystemDir(name))
+                        pending.Push(entry);
                 }
-                else if (LibraryIndex.IsMediaFile(entry)) files.Add(entry);
+                else if (LibraryIndex.IsMediaFile(entry) && !IsHiddenSystemDir(Path.GetFileName(entry)))
+                    files.Add(entry);
             }
         }
         return files;
     }
+
+    private static bool IsHiddenSystemDir(string name) =>
+        name.Length > 0 && name[0] is '.' or '@' or '#';
 
     private RenameOutcome Relocate(string source, string dest, bool merge, bool isDir)
     {

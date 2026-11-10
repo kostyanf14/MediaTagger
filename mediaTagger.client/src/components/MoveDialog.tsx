@@ -138,8 +138,10 @@ export function SortFolderDialog({ folder, onCancel, onSorted }: {
       <DialogContent>
         {result ? (
           <Typography variant="body2" sx={{ mt: 1 }}>
-            Переміщено {result.moved}. Без дати, у папку 0000: {result.undated}.
-            Пропущено, бо така назва вже є: {result.skipped}.
+            Переміщено {result.moved} у підпапки рік/місяць
+            {result.undated > 0 ? ` (з них без дати в 0000: ${result.undated})` : ''}.
+            Ще {result.skipped} не чіпав: у потрібній папці вже є файл з такою назвою,
+            тож вони лишилися на старих місцях, часто в підпапках. Нічого не видалено.
           </Typography>
         ) : (
           <Typography variant="body2" sx={{ mt: 1 }}>
