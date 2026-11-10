@@ -127,6 +127,7 @@ interface TileProps {
 
 // Memoised so that selecting one photo re-renders that tile, not the whole screen.
 const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleClick, onDragStart, onMenu }: TileProps) {
+  const labels = file.tags.people.length > 0 ? file.tags.people : file.tags.albums
   return (
     <TileRoot
       draggable
@@ -180,19 +181,19 @@ const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleCli
         <MoreVertIcon sx={{ fontSize: 16 }} />
       </IconButton>
 
-      {/* Tags overlay */}
-      {file.tags.people.length > 0 && (
+      {/* People first; albums only when nobody is tagged. Same two-name limit. */}
+      {labels.length > 0 && (
         <Box sx={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
           background: 'linear-gradient(transparent, rgba(0,0,0,0.75))',
           p: 0.8, display: 'flex', flexWrap: 'wrap', gap: 0.3
         }}>
-          {file.tags.people.slice(0, 2).map(p => (
-            <Chip key={p} label={p} size="small"
+          {labels.slice(0, 2).map(label => (
+            <Chip key={label} label={label} size="small"
               sx={{ height: 18, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.15)', color: 'white' }} />
           ))}
-          {file.tags.people.length > 2 && (
-            <Chip label={`+${file.tags.people.length - 2}`} size="small"
+          {labels.length > 2 && (
+            <Chip label={`+${labels.length - 2}`} size="small"
               sx={{ height: 18, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.1)', color: 'white' }} />
           )}
         </Box>
