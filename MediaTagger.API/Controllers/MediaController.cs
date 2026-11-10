@@ -255,6 +255,7 @@ public class MediaController : ControllerBase
             ".m4v"            => "video/mp4",
             ".wmv"            => "video/x-ms-wmv",
             ".mts" or ".m2ts" => "video/mp2t",
+            ".3gp"            => "video/3gpp",
             _                 => "video/mp4"
         };
 

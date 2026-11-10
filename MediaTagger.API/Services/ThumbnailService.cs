@@ -8,7 +8,7 @@ namespace MediaTagger.API.Services;
 public class ThumbnailService
 {
     private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
-        { ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".webm", ".mts", ".m2ts" };
+        { ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".webm", ".mts", ".m2ts", ".3gp" };
 
     private static readonly HashSet<string> HeicExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".heic", ".heif" };
