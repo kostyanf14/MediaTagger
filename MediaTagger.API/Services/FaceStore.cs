@@ -281,44 +281,76 @@ public class FaceStore : IDisposable
     /// </summary>
     public void Retarget(string oldFullPath, string newFullPath)
     {
-        var from = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(oldFullPath)));
-        var to = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(newFullPath)));
-        if (from.Volume != to.Volume || from.Path == to.Path) return;
+        var from = CacheKey(oldFullPath);
+        var to = CacheKey(newFullPath);
+        if (from == to) return;
 
-        List<(string Old, string New)> moves;
-        List<long> droppedFaces;
+        Dictionary<(string Volume, string Path), (string Volume, string Path)> map;
         lock (_gate)
         {
-            moves = _files.Keys
-                .Where(k => k.Volume == from.Volume && StoredPath.Covers(k.Path, from.Path))
-                .Select(k => (k.Path, StoredPath.Map(k.Path, from.Path, to.Path)))
-                .ToList();
-            if (moves.Count == 0) return;
+            map = new Dictionary<(string Volume, string Path), (string Volume, string Path)>();
+            foreach (var key in _files.Keys)
+                if (key.Volume == from.Volume && StoredPath.Covers(key.Path, from.Path))
+                    map[key] = (to.Volume, StoredPath.Map(key.Path, from.Path, to.Path));
+        }
+        ApplyRetarget(map);
+    }
 
-            droppedFaces = new List<long>();
+    /// <summary>Points each listed file at its new path. One pass over the cache, including a change of volume.</summary>
+    public void RetargetAll(IReadOnlyList<(string OldFullPath, string NewFullPath)> moves)
+    {
+        var map = new Dictionary<(string Volume, string Path), (string Volume, string Path)>();
+        foreach (var (oldFull, newFull) in moves)
+        {
+            var from = CacheKey(oldFull);
+            var to = CacheKey(newFull);
+            if (from != to) map[from] = to;
+        }
+        ApplyRetarget(map);
+    }
+
+    private static (string Volume, string Path) CacheKey(string fullPath) =>
+        VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(fullPath)));
+
+    private void ApplyRetarget(Dictionary<(string Volume, string Path), (string Volume, string Path)> map)
+    {
+        if (map.Count == 0) return;
+        lock (_gate)
+        {
+            var hits = map.Where(kv => _files.ContainsKey(kv.Key)).Select(kv => (Old: kv.Key, New: kv.Value)).ToList();
+            if (hits.Count == 0) return;
+
+            var droppedFaces = new List<long>();
             using var tx = _connection.BeginTransaction();
-            foreach (var (oldPath, newPath) in moves)
+            foreach (var (oldKey, newKey) in hits)
             {
-                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
-                    DropFileRows(from.Volume, newPath, tx, droppedFaces);
-                using var updateFiles = Command("UPDATE files SET path = $n WHERE volume = $v AND path = $o", tx);
-                using var updateFaces = Command("UPDATE faces SET path = $n WHERE volume = $v AND path = $o", tx);
-                updateFiles.Parameters.AddWithValue("$n", newPath);
-                updateFiles.Parameters.AddWithValue("$v", from.Volume);
-                updateFiles.Parameters.AddWithValue("$o", oldPath);
+                if (oldKey != newKey && !map.ContainsKey(newKey))
+                    DropFileRows(newKey.Volume, newKey.Path, tx, droppedFaces);
+                using var updateFiles = Command(
+                    "UPDATE files SET volume = $nv, path = $np WHERE volume = $ov AND path = $op", tx);
+                using var updateFaces = Command(
+                    "UPDATE faces SET volume = $nv, path = $np WHERE volume = $ov AND path = $op", tx);
+                updateFiles.Parameters.AddWithValue("$nv", newKey.Volume);
+                updateFiles.Parameters.AddWithValue("$np", newKey.Path);
+                updateFiles.Parameters.AddWithValue("$ov", oldKey.Volume);
+                updateFiles.Parameters.AddWithValue("$op", oldKey.Path);
                 updateFiles.ExecuteNonQuery();
-                updateFaces.Parameters.AddWithValue("$n", newPath);
-                updateFaces.Parameters.AddWithValue("$v", from.Volume);
-                updateFaces.Parameters.AddWithValue("$o", oldPath);
+                updateFaces.Parameters.AddWithValue("$nv", newKey.Volume);
+                updateFaces.Parameters.AddWithValue("$np", newKey.Path);
+                updateFaces.Parameters.AddWithValue("$ov", oldKey.Volume);
+                updateFaces.Parameters.AddWithValue("$op", oldKey.Path);
                 updateFaces.ExecuteNonQuery();
             }
             tx.Commit();
 
-            foreach (var (oldPath, newPath) in moves)
+            var kept = hits.Select(h => (h.Old, h.New, Known: _files[h.Old])).ToList();
+            foreach (var (oldKey, _, _) in kept)
+                _files.TryRemove(oldKey, out _);
+            foreach (var (_, newKey, known) in kept)
             {
-                _files.TryRemove((from.Volume, newPath), out _);
-                if (_files.TryRemove((from.Volume, oldPath), out var known))
-                    _files[(from.Volume, newPath)] = known;
+                if (!map.ContainsKey(newKey))
+                    _files.TryRemove(newKey, out _);
+                _files[newKey] = known;
             }
             foreach (var id in droppedFaces)
             {

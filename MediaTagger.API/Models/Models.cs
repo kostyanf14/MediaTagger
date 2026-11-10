@@ -257,6 +257,14 @@ public class RenameResponse
     public AppSettings Settings { get; set; } = new();
 }
 
+public class MoveRequest
+{
+    public string Path { get; set; } = "";
+    public string Destination { get; set; } = "";
+    /// <summary>When a folder of this name is already in the destination, combine them.</summary>
+    public bool Merge { get; set; }
+}
+
 public class RenamePeopleRequest
 {
     public List<string> RootPaths { get; set; } = new();

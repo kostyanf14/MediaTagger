@@ -15,6 +15,7 @@ import GroupWorkIcon from '@mui/icons-material/GroupWork'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
+import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
 import { MediaFile, mediaApi, THUMB_SIZE } from '../api/client'
 import { FileGroup, GroupField, SortDir, SortField } from '../utils/mediaOrder'
 import { Thumbnail } from './Thumbnail'
@@ -55,6 +56,7 @@ interface Props {
   /** Asks to delete the file; the confirmation is the app's. */
   onDelete: (file: MediaFile) => void
   onRename: (file: MediaFile) => void
+  onMove: (file: MediaFile) => void
 }
 
 /**
@@ -202,7 +204,7 @@ const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleCli
 export function MediaGallery({
   groups, orderedFiles, loading, recursive, onRecursiveChange,
   sortField, sortDir, groupBy, onSortField, onSortDir, onGroupBy,
-  selectedPaths, onSelectionChange, onDoubleClick, onDelete, onRename
+  selectedPaths, onSelectionChange, onDoubleClick, onDelete, onRename, onMove
 }: Props) {
   const { startNativeDrag, isElectron, revealInExplorer, openFile } = useElectron()
   const [draggingPath, setDraggingPath] = useState<string | null>(null)
@@ -430,6 +432,9 @@ export function MediaGallery({
         </MenuItem>
         <MenuItem onClick={() => { if (menuAnchor) onRename(menuAnchor.file) }}>
           <DriveFileRenameOutlineIcon fontSize="small" sx={{ mr: 1 }} /> Перейменувати
+        </MenuItem>
+        <MenuItem onClick={() => { if (menuAnchor) onMove(menuAnchor.file) }}>
+          <DriveFileMoveIcon fontSize="small" sx={{ mr: 1 }} /> Перемістити
         </MenuItem>
         {/* The app asks for confirmation; Delete on the keyboard does the same for a selection. */}
         <MenuItem

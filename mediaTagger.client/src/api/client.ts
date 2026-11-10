@@ -263,6 +263,8 @@ export const mediaApi = {
     api.delete('/media/file', { params: { filePath } }),
   rename: (path: string, newName: string, merge = false) =>
     api.post<RenameResponse>('/media/rename', { path, newName, merge }),
+  move: (path: string, destination: string, merge = false) =>
+    api.post<RenameResponse>('/media/move', { path, destination, merge }),
   // How many of these a delete would remove for good instead of moving to the recycle bin.
   deleteCheck: (filePaths: string[]) =>
     api.post<number>('/media/delete-check', filePaths),

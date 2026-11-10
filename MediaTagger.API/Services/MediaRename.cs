@@ -55,8 +55,42 @@ public class MediaRename
         if (currentName.Equals(newName, StringComparison.Ordinal))
             return new RenameOutcome { Path = source, Settings = _settings.Get() };
 
-        var dest = Path.Combine(parent, newName);
-        var caseOnly = currentName.Equals(newName, StringComparison.OrdinalIgnoreCase);
+        return Relocate(source, Path.Combine(parent, newName), merge, isDir);
+    }
+
+    /// <summary>Moves a file or folder into an existing folder, keeping every stored path.</summary>
+    public RenameOutcome MoveInto(string rawPath, string rawDestination, bool merge)
+    {
+        string source, destination;
+        try
+        {
+            source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath));
+            destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawDestination));
+        }
+        catch { return new RenameOutcome { Code = "invalid" }; }
+
+        if (!Directory.Exists(destination)) return new RenameOutcome { Code = "missing" };
+        var isDir = Directory.Exists(source);
+        if (!isDir && !File.Exists(source)) return new RenameOutcome { Code = "missing" };
+
+        var parent = Path.GetDirectoryName(source);
+        if (string.IsNullOrEmpty(parent)) return new RenameOutcome { Code = "invalid" };
+        if (parent.Equals(destination, StringComparison.OrdinalIgnoreCase))
+            return new RenameOutcome { Path = source, Settings = _settings.Get() };
+
+        // A folder cannot be moved into itself.
+        if (isDir && IsUnder(destination, source)) return new RenameOutcome { Code = "invalid" };
+
+        return Relocate(source, Path.Combine(destination, Path.GetFileName(source)), merge, isDir);
+    }
+
+    private RenameOutcome Relocate(string source, string dest, bool merge, bool isDir)
+    {
+        var parent = Path.GetDirectoryName(source)!;
+        var currentName = Path.GetFileName(source);
+        var newName = Path.GetFileName(dest);
+        var caseOnly = currentName.Equals(newName, StringComparison.OrdinalIgnoreCase)
+            && Path.GetDirectoryName(dest)!.Equals(parent, StringComparison.OrdinalIgnoreCase);
         var merged = false;
 
         // shortcut: a case-only change on a case-sensitive disk is treated as the same
@@ -95,9 +129,10 @@ public class MediaRename
         var settings = _settings.RetargetPaths(source, dest);
 
         _fs.InvalidateFolder(parent);
+        var destParent = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(destParent)) _fs.InvalidateFolder(destParent);
         _fs.Forget(source);
         if (isDir) _fs.InvalidateFolder(dest);
-        else _fs.InvalidateFolder(parent);
 
         return new RenameOutcome { Path = dest, Merged = merged, Settings = settings };
     }
@@ -167,6 +202,14 @@ public class MediaRename
     {
         if (directory) Directory.Move(source, dest);
         else File.Move(source, dest);
+    }
+
+    private static bool IsUnder(string path, string root)
+    {
+        if (path.Equals(root, StringComparison.OrdinalIgnoreCase)) return true;
+        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirectory(string path)

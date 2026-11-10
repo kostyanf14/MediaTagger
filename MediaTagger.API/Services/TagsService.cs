@@ -203,31 +203,48 @@ public class TagsService
     }
 
     /// <summary>Keeps a file's tags with it when the file is renamed. The key is the file name.</summary>
-    public void MoveFileEntry(string oldPath, string newPath)
+    public void MoveFileEntry(string oldPath, string newPath) =>
+        MoveFileEntries(new[] { (oldPath, newPath) });
+
+    /// <summary>Moves many tag entries, reading each folder's file once.</summary>
+    public void MoveFileEntries(IReadOnlyList<(string OldPath, string NewPath)> moves)
     {
-        var oldDir = Path.GetDirectoryName(oldPath) ?? "";
-        var newDir = Path.GetDirectoryName(newPath) ?? "";
-        var oldName = Path.GetFileName(oldPath);
-        var newName = Path.GetFileName(newPath);
+        if (moves.Count == 0) return;
         lock (_writeGate)
         {
-            var source = ReadTagsFile(oldDir);
-            var key = source.Files.Keys.FirstOrDefault(k => k.Equals(oldName, StringComparison.OrdinalIgnoreCase));
-            if (key == null) return;
-            var tags = source.Files[key];
-            source.Files.Remove(key);
-
-            if (string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase))
+            var pending = new Dictionary<string, List<(string Name, FileTags Tags)>>(StoredPath.Comparer);
+            foreach (var group in moves.GroupBy(m => Path.GetDirectoryName(m.OldPath) ?? "", StoredPath.Comparer))
             {
-                source.Files[newName] = tags;
-                WriteTagsFile(oldDir, source);
-                return;
+                var source = ReadTagsFile(group.Key);
+                var changed = false;
+                foreach (var (oldPath, newPath) in group)
+                {
+                    var oldName = Path.GetFileName(oldPath);
+                    var key = source.Files.Keys.FirstOrDefault(k => k.Equals(oldName, StoredPath.Comparison));
+                    if (key == null) continue;
+                    var tags = source.Files[key];
+                    source.Files.Remove(key);
+                    changed = true;
+                    var newDir = Path.GetDirectoryName(newPath) ?? "";
+                    var newName = Path.GetFileName(newPath);
+                    if (StoredPath.Same(group.Key, newDir))
+                    {
+                        source.Files[newName] = tags;
+                        continue;
+                    }
+                    if (!pending.TryGetValue(newDir, out var list))
+                        pending[newDir] = list = new();
+                    list.Add((newName, tags));
+                }
+                if (changed) WriteTagsFile(group.Key, source);
             }
-
-            WriteTagsFile(oldDir, source);
-            var dest = ReadTagsFile(newDir);
-            dest.Files[newName] = tags;
-            WriteTagsFile(newDir, dest);
+            foreach (var (dir, list) in pending)
+            {
+                var dest = ReadTagsFile(dir);
+                foreach (var (name, tags) in list)
+                    dest.Files[name] = tags;
+                WriteTagsFile(dir, dest);
+            }
         }
     }
 

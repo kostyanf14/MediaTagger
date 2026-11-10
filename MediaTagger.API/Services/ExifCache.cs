@@ -115,17 +115,46 @@ public class ExifCache : IDisposable
     /// <summary>Points cached metadata at the path a file or folder was renamed to.</summary>
     public void Retarget(string oldFullPath, string newFullPath)
     {
-        var from = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(oldFullPath)));
-        var to = VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(newFullPath)));
-        if (from.Volume != to.Volume || from.Path == to.Path) return;
+        var from = CacheKey(oldFullPath);
+        var to = CacheKey(newFullPath);
+        if (from == to) return;
 
+        Dictionary<(string Volume, string Path), (string Volume, string Path)> map;
         lock (_gate)
         {
-            var moves = _entries.Keys
-                .Where(k => k.Volume == from.Volume && StoredPath.Covers(k.Path, from.Path))
-                .Select(k => (Old: k.Path, New: StoredPath.Map(k.Path, from.Path, to.Path)))
+            map = new Dictionary<(string Volume, string Path), (string Volume, string Path)>();
+            foreach (var key in _entries.Keys)
+                if (key.Volume == from.Volume && StoredPath.Covers(key.Path, from.Path))
+                    map[key] = (to.Volume, StoredPath.Map(key.Path, from.Path, to.Path));
+        }
+        ApplyRetarget(map);
+    }
+
+    /// <summary>Points each listed file at its new path. One pass over the cache, including a change of volume.</summary>
+    public void RetargetAll(IReadOnlyList<(string OldFullPath, string NewFullPath)> moves)
+    {
+        var map = new Dictionary<(string Volume, string Path), (string Volume, string Path)>();
+        foreach (var (oldFull, newFull) in moves)
+        {
+            var from = CacheKey(oldFull);
+            var to = CacheKey(newFull);
+            if (from != to) map[from] = to;
+        }
+        ApplyRetarget(map);
+    }
+
+    private static (string Volume, string Path) CacheKey(string fullPath) =>
+        VolumeKey.For(Path.TrimEndingDirectorySeparator(Path.GetFullPath(fullPath)));
+
+    private void ApplyRetarget(Dictionary<(string Volume, string Path), (string Volume, string Path)> map)
+    {
+        if (map.Count == 0) return;
+        lock (_gate)
+        {
+            var hits = map.Where(kv => _entries.ContainsKey(kv.Key))
+                .Select(kv => (Old: kv.Key, New: kv.Value, Entry: _entries[kv.Key]))
                 .ToList();
-            if (moves.Count == 0) return;
+            if (hits.Count == 0) return;
 
             using var tx = _connection.BeginTransaction();
             using var delete = _connection.CreateCommand();
@@ -133,28 +162,32 @@ public class ExifCache : IDisposable
             delete.CommandText = "DELETE FROM exif WHERE volume = $v AND path = $p";
             using var update = _connection.CreateCommand();
             update.Transaction = tx;
-            update.CommandText = "UPDATE exif SET path = $n WHERE volume = $v AND path = $o";
-            foreach (var (oldPath, newPath) in moves)
+            update.CommandText = "UPDATE exif SET volume = $nv, path = $np WHERE volume = $ov AND path = $op";
+            foreach (var (oldKey, newKey, _) in hits)
             {
-                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+                if (oldKey != newKey && !map.ContainsKey(newKey))
                 {
                     delete.Parameters.Clear();
-                    delete.Parameters.AddWithValue("$v", from.Volume);
-                    delete.Parameters.AddWithValue("$p", newPath);
+                    delete.Parameters.AddWithValue("$v", newKey.Volume);
+                    delete.Parameters.AddWithValue("$p", newKey.Path);
                     delete.ExecuteNonQuery();
                 }
                 update.Parameters.Clear();
-                update.Parameters.AddWithValue("$n", newPath);
-                update.Parameters.AddWithValue("$v", from.Volume);
-                update.Parameters.AddWithValue("$o", oldPath);
+                update.Parameters.AddWithValue("$nv", newKey.Volume);
+                update.Parameters.AddWithValue("$np", newKey.Path);
+                update.Parameters.AddWithValue("$ov", oldKey.Volume);
+                update.Parameters.AddWithValue("$op", oldKey.Path);
                 update.ExecuteNonQuery();
             }
             tx.Commit();
 
-            foreach (var (oldPath, newPath) in moves)
+            foreach (var (oldKey, _, _) in hits)
+                _entries.TryRemove(oldKey, out _);
+            foreach (var (_, newKey, entry) in hits)
             {
-                _entries.TryRemove((from.Volume, oldPath), out var entry);
-                _entries[(from.Volume, newPath)] = entry;
+                if (!map.ContainsKey(newKey))
+                    _entries.TryRemove(newKey, out _);
+                _entries[newKey] = entry;
             }
         }
     }

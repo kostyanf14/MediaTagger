@@ -18,6 +18,7 @@ import LocationOnIcon from '@mui/icons-material/LocationOn'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
+import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
 import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -43,6 +44,8 @@ interface Props {
   onDelete?: (file: MediaFile) => void
   /** Asks for a new file name. */
   onRename?: (file: MediaFile) => void
+  /** Asks which folder to move the file into. */
+  onMove?: (file: MediaFile) => void
   /** A click beside the picture closes the viewer. */
   closeOnOutsideClick?: boolean
   /** Take the whole screen while this photo is open. */
@@ -69,7 +72,7 @@ function pictureRect(img: HTMLImageElement) {
 }
 
 export function LightboxViewer({
-  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, onRename,
+  file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, onRename, onMove,
   closeOnOutsideClick, fullscreen, copyPhoto = true, paused
 }: Props) {
   const { revealInExplorer, openFile, isElectron, copyPhoto: copyPhotoToClipboard } = useElectron()
@@ -359,6 +362,14 @@ export function LightboxViewer({
               <Tooltip title="Перейменувати файл">
                 <IconButton size="small" onClick={() => onRename(file)} sx={{ color: 'white' }}>
                   <DriveFileRenameOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {onMove && (
+              <Tooltip title="Перемістити в іншу папку">
+                <IconButton size="small" onClick={() => onMove(file)} sx={{ color: 'white' }}>
+                  <DriveFileMoveIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}

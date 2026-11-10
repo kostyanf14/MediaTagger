@@ -153,6 +153,74 @@ public class RenameTests
         Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(Path.Combine(dest, "a.jpg")));
     }
 
+    [Fact]
+    public void Moving_a_file_keeps_its_tags_in_the_new_folder()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("library");
+        var from = Path.Combine(root, "inbox");
+        var to = Path.Combine(root, "kept");
+        Directory.CreateDirectory(from);
+        Directory.CreateDirectory(to);
+        var file = Path.Combine(from, "a.jpg");
+        File.WriteAllBytes(file, new byte[] { 1, 2, 3 });
+        File.WriteAllText(Path.Combine(from, "_tags.json"), """
+            { "files": { "a.jpg": { "people": ["Анна"], "groups": [], "albums": [], "place": "", "notes": "" } } }
+            """);
+        var info = new FileInfo(file);
+        world.Faces.Save(file, info.Length, info.LastWriteTimeUtc.Ticks, 1, 4, 4,
+            new[] { new DetectedFace(0, 0, 1, 1, 1, new[] { 1f }) });
+
+        var outcome = world.Rename.MoveInto(file, to, merge: false);
+
+        var dest = Path.Combine(to, "a.jpg");
+        Assert.Null(outcome.Code);
+        Assert.Equal(dest, outcome.Path);
+        Assert.False(File.Exists(file));
+        Assert.Equal(new[] { "Анна" }, world.Tags.ReadTagsFile(to).Files["a.jpg"].People);
+        Assert.False(world.Tags.ReadTagsFile(from).Files.ContainsKey("a.jpg"));
+        var moved = new FileInfo(dest);
+        Assert.NotNull(world.Faces.TryGet(dest, moved.Length, moved.LastWriteTimeUtc.Ticks));
+    }
+
+    [Fact]
+    public void Moving_a_folder_into_itself_is_refused()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("library");
+        var folder = Path.Combine(root, "Trip");
+        var child = Path.Combine(folder, "day");
+        Directory.CreateDirectory(child);
+
+        var intoSelf = world.Rename.MoveInto(folder, folder, merge: false);
+        var intoChild = world.Rename.MoveInto(folder, child, merge: false);
+
+        Assert.Equal("invalid", intoSelf.Code);
+        Assert.Equal("invalid", intoChild.Code);
+        Assert.True(Directory.Exists(folder));
+    }
+
+    [Fact]
+    public void Moving_onto_an_existing_folder_asks_before_merging()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("library");
+        var from = Path.Combine(root, "a");
+        var into = Path.Combine(root, "b");
+        Directory.CreateDirectory(Path.Combine(from, "Trip"));
+        Directory.CreateDirectory(Path.Combine(into, "Trip"));
+        File.WriteAllBytes(Path.Combine(from, "Trip", "a.jpg"), new byte[] { 1 });
+
+        var ask = world.Rename.MoveInto(Path.Combine(from, "Trip"), into, merge: false);
+        Assert.Equal("merge", ask.Code);
+        Assert.True(File.Exists(Path.Combine(from, "Trip", "a.jpg")));
+
+        var merged = world.Rename.MoveInto(Path.Combine(from, "Trip"), into, merge: true);
+        Assert.Null(merged.Code);
+        Assert.True(merged.Merged);
+        Assert.True(File.Exists(Path.Combine(into, "Trip", "a.jpg")));
+    }
+
     private sealed class RenameWorld : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "mt-rename-" + Guid.NewGuid().ToString("N"));

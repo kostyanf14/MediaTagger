@@ -79,6 +79,18 @@ public class MediaController : ControllerBase
         return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
     }
 
+    /// <summary>Moves a file or folder into another folder. A name clash on a folder waits for <c>merge</c>.</summary>
+    [HttpPost("move")]
+    public ActionResult<RenameResponse> Move([FromBody] MoveRequest request)
+    {
+        var outcome = _rename.MoveInto(request.Path, request.Destination ?? "", request.Merge);
+        if (outcome.Code == "merge") return Conflict(new { code = "merge", destination = outcome.Destination });
+        if (outcome.Code == "exists") return Conflict(new { code = "exists", name = outcome.Name });
+        if (outcome.Code == "missing") return NotFound();
+        if (outcome.Code != null) return BadRequest("Invalid move");
+        return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
+    }
+
     [HttpDelete("file")]
     public ActionResult DeleteFile([FromQuery] string filePath)
     {
