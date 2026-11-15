@@ -527,39 +527,23 @@ public class FaceStore : IDisposable
     }
 
     /// <summary>
-    /// Faces with no name, from photos only. <paramref name="roots"/> are library folders.
-    /// The stored path is lowercased, which Windows still opens.
+    /// Faces with no name, from photos only. <paramref name="files"/> are the library's own paths,
+    /// so the crop keeps the case the disk uses. The stored key is lowercased and a NAS will not open it.
     /// </summary>
-    public List<UnnamedPhoto> UnnamedPhotos(IReadOnlyList<string> roots, int limit)
+    public List<UnnamedPhoto> UnnamedPhotos(IEnumerable<(string Path, long Size, long Mtime)> files, int limit)
     {
-        var scopes = new List<(string Volume, string Rel, string VolumeRoot)>();
-        foreach (var root in roots)
-        {
-            string full;
-            try { full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)); }
-            catch { continue; }
-            var key = VolumeKey.For(full);
-            var rel = key.Path.TrimEnd('\\', '/');
-            var volumeRoot = rel.Length == 0 ? full + Path.DirectorySeparatorChar : full[..^rel.Length];
-            scopes.Add((key.Volume, rel, volumeRoot));
-        }
-
         var hits = new List<UnnamedPhoto>();
         var seen = new HashSet<long>();
-        foreach (var (key, stored) in _files)
+        foreach (var file in files)
         {
-            (string Volume, string Rel, string VolumeRoot)? scope = null;
-            foreach (var candidate in scopes)
-                if (candidate.Volume == key.Volume && UnnamedFaceRules.UnderRoot(key.Path, candidate.Rel))
-                { scope = candidate; break; }
-            if (scope == null) continue;
-            var filePath = scope.Value.VolumeRoot + key.Path;
+            var stored = TryGet(file.Path, file.Size, file.Mtime);
+            if (stored == null) continue;
             foreach (var face in stored.Faces)
             {
                 if (!seen.Add(face.Id)) continue;
                 if (!UnnamedFaceRules.IsQueuePhoto(face.Time, _labels.ContainsKey(face.Id), _unnamedSkips.ContainsKey(face.Id)))
                     continue;
-                hits.Add(new UnnamedPhoto(filePath, face, stored.Width, stored.Height));
+                hits.Add(new UnnamedPhoto(file.Path, face, stored.Width, stored.Height));
             }
         }
         return hits.OrderByDescending(h => h.Face.W * h.Face.H).Take(limit).ToList();

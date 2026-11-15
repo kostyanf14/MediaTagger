@@ -163,7 +163,17 @@ public class FacesController : ControllerBase
     {
         var roots = FileSystemService.Collapse(rootPath);
         if (roots.Length == 0) return BadRequest("Folder not found");
-        var faces = _store.UnnamedPhotos(roots, Math.Clamp(limit, 1, 24));
+        var files = new List<(string Path, long Size, long Mtime)>();
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (var file in _fs.GetMediaFiles(root, recursive: true))
+            {
+                if (file.Type != "image") continue;
+                files.Add((file.FilePath, file.Size, FaceIndexer.MtimeOf(file)));
+            }
+        }
+        var faces = _store.UnnamedPhotos(files, Math.Clamp(limit, 1, 24));
         return Ok(faces.Select(item => new FaceSuggestion
         {
             FaceId = item.Face.Id,
