@@ -3,17 +3,23 @@ import { Box, Button, TextField, Typography } from '@mui/material'
 import { facesApi, FaceSuggestion, FEATURES, FEATURE_UNSUPPORTED } from '../api/client'
 import { isFeatureUnsupported } from '../features'
 import { useFeature } from '../useFeature'
-import { FaceAvatar } from './FaceAvatar'
+import { FaceHover, faceFile, FACE_CARD_SIZE } from './FaceCard'
+import { LightboxViewer } from './LightboxViewer'
 
 interface Props {
   roots: string[]
   /** Names already learned, offered as the field’s suggestions. */
   names: string[]
   onNamed: (filePath: string, person: string) => void
+  doubleClickFullscreen?: boolean
+  closeViewerOnOutsideClick?: boolean
+  copyPhoto?: boolean
 }
 
 /** One unnamed photo face at a time. Mounted only while the queue is open, so nothing is fetched before that. */
-export function UnnamedFaces({ roots, names, onNamed }: Props) {
+export function UnnamedFaces({
+  roots, names, onNamed, doubleClickFullscreen = true, closeViewerOnOutsideClick, copyPhoto
+}: Props) {
   const [queue, setQueue] = useState<FaceSuggestion[] | null>(null)
   const [unsupported, setUnsupported] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -21,6 +27,8 @@ export function UnnamedFaces({ roots, names, onNamed }: Props) {
   const [busy, setBusy] = useState(false)
   const unnamed = useFeature(FEATURES.unnamedFaces)
   const current = queue?.[0]
+  const [openFile, setOpenFile] = useState<ReturnType<typeof faceFile> | null>(null)
+  const [openFullscreen, setOpenFullscreen] = useState(false)
 
   const load = useCallback(() => {
     setFailed(false)
@@ -94,7 +102,10 @@ export function UnnamedFaces({ roots, names, onNamed }: Props) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.5,
       borderBottom: '1px solid', borderColor: 'divider' }}>
-      <FaceAvatar filePath={current.filePath} box={current} size={96} variant="rounded" />
+      <FaceHover item={current} size={FACE_CARD_SIZE} onOpen={item => {
+        setOpenFullscreen(doubleClickFullscreen)
+        setOpenFile(faceFile(item))
+      }} />
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
           Хто це? Лише фото. {current.fileName}
@@ -114,6 +125,16 @@ export function UnnamedFaces({ roots, names, onNamed }: Props) {
           <Button size="small" disabled={busy} onClick={() => void skip()}>Пропустити</Button>
         </Box>
       </Box>
+      <LightboxViewer
+        file={openFile}
+        files={openFile ? [openFile] : []}
+        onClose={() => setOpenFile(null)}
+        onNavigate={setOpenFile}
+        onOpenTags={() => setOpenFile(null)}
+        fullscreen={openFullscreen}
+        closeOnOutsideClick={closeViewerOnOutsideClick}
+        copyPhoto={copyPhoto}
+      />
     </Box>
   )
 }

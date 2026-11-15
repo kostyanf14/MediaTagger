@@ -3,30 +3,25 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   Box, Typography, Button, IconButton, Tooltip, LinearProgress, Chip, Alert, Skeleton
 } from '@mui/material'
-import CheckIcon from '@mui/icons-material/Check'
-import CloseIcon from '@mui/icons-material/Close'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import StopIcon from '@mui/icons-material/Stop'
 import FaceRetouchingNaturalIcon from '@mui/icons-material/FaceRetouchingNatural'
 import {
-  facesApi, mediaApi, FaceScanStatus, FaceSuggestionsResponse, FaceSuggestion, BulkTagsRequest,
-  MediaFile, THUMB_SIZE
+  facesApi, FaceScanStatus, FaceSuggestionsResponse, FaceSuggestion, BulkTagsRequest, MediaFile
 } from '../api/client'
 import { FaceAvatar } from './FaceAvatar'
+import { FaceCard, faceFile, FACE_CARD_SIZE, CONFIDENT_SCORE } from './FaceCard'
 import { LightboxViewer } from './LightboxViewer'
 import { UnnamedFaces } from './UnnamedFaces'
 
 // Often enough that the counter visibly moves, rare enough to stay out of the scan's way.
 const STATUS_POLL_MS = 1500
-const CARD_SIZE = 104
 const CARD_GAP = 8
 const HEADER_HEIGHT = 48
 // Card plus the filename under it, and a little air before the next row.
-const CARD_ROW_HEIGHT = CARD_SIZE + 22
+const CARD_ROW_HEIGHT = FACE_CARD_SIZE + 22
 const OVERSCAN_ROWS = 3
-// "Add to all" only takes matches this close; weaker ones are left to be checked one by one.
-const CONFIDENT_SCORE = 0.55
 
 type SuggestionGroup = { person: string; total: number; items: FaceSuggestion[] }
 type FaceRow =
@@ -59,84 +54,6 @@ interface Props {
   doubleClickFullscreen?: boolean
   closeViewerOnOutsideClick?: boolean
   copyPhoto?: boolean
-}
-
-function faceFile(item: FaceSuggestion): MediaFile {
-  return {
-    fileName: item.fileName, filePath: item.filePath, relativePath: '',
-    type: item.type, size: 0, modified: '',
-    tags: { people: [], place: '', groups: [], albums: [], notes: '' }
-  }
-}
-
-/** Similarity → how the card is outlined. ArcFace scores above ~0.6 are near-certain. */
-function scoreColor(score: number): string {
-  if (score >= CONFIDENT_SCORE) return 'success.main'
-  if (score >= 0.5) return 'warning.main'
-  return 'divider'
-}
-
-/** The whole photo (or the video frame the face was seen in) with the face marked, so a crop can be judged in context. */
-function FaceContext({ item }: { item: FaceSuggestion }) {
-  return (
-    <Box sx={{ position: 'relative', width: 260 }}>
-      <Box component="img" src={mediaApi.getThumbnailUrl(item.filePath, THUMB_SIZE, item.time)} alt={item.fileName}
-        crossOrigin="anonymous" sx={{ width: '100%', display: 'block', borderRadius: 0.5 }} />
-      <Box sx={{
-        position: 'absolute',
-        left: `${item.x * 100}%`, top: `${item.y * 100}%`,
-        width: `${item.w * 100}%`, height: `${item.h * 100}%`,
-        border: '2px solid', borderColor: 'warning.main', borderRadius: 0.5
-      }} />
-      <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-        {item.fileName} · схожість {Math.round(item.score * 100)}%
-      </Typography>
-    </Box>
-  )
-}
-
-function FaceCard({ item, person, onAccept, onReject, onOpen }: {
-  item: FaceSuggestion
-  person: string
-  onAccept: (person: string, items: FaceSuggestion[]) => void
-  onReject: (person: string, items: FaceSuggestion[]) => void
-  onOpen: (item: FaceSuggestion) => void
-}) {
-  return (
-    <Box onDoubleClick={() => onOpen(item)} sx={{
-      position: 'relative', width: CARD_SIZE, flexShrink: 0, cursor: 'pointer',
-      '&:hover .face-actions': { opacity: 1 }
-    }}>
-      <Tooltip title={<FaceContext item={item} />} placement="top" enterDelay={500}
-        componentsProps={{ tooltip: { sx: { maxWidth: 'none', p: 1 } } }}>
-        <Box>
-          <FaceAvatar filePath={item.filePath} box={item} size={CARD_SIZE} variant="rounded"
-            sx={{ border: '2px solid', borderColor: scoreColor(item.score) }} />
-        </Box>
-      </Tooltip>
-      <Box className="face-actions" onDoubleClick={e => e.stopPropagation()} sx={{
-        position: 'absolute', top: 4, right: 4, display: 'flex', gap: 0.5,
-        opacity: 0, transition: 'opacity 0.15s'
-      }}>
-        <Tooltip title={`Так, це ${person}`}>
-          <IconButton size="small" onClick={() => onAccept(person, [item])}
-            sx={{ bgcolor: 'success.dark', p: 0.25, '&:hover': { bgcolor: 'success.main' } }}>
-            <CheckIcon sx={{ fontSize: 16 }} />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Ні">
-          <IconButton size="small" onClick={() => onReject(person, [item])}
-            sx={{ bgcolor: 'error.dark', p: 0.25, '&:hover': { bgcolor: 'error.main' } }}>
-            <CloseIcon sx={{ fontSize: 16 }} />
-          </IconButton>
-        </Tooltip>
-      </Box>
-      <Typography variant="caption" color="text.secondary" noWrap
-        sx={{ display: 'block', fontSize: '0.65rem' }} title={item.fileName}>
-        {item.fileName}
-      </Typography>
-    </Box>
-  )
 }
 
 export function FacesPanel({
@@ -239,7 +156,7 @@ export function FacesPanel({
   // The percent is what the tooltip shows, so 80.4% (shown as 80) stays for a manual check.
   const above80 = people.reduce((n, g) => n + g.items.filter(i => Math.round(i.score * 100) > 80).length, 0)
 
-  const columns = Math.max(1, Math.floor((width + CARD_GAP) / (CARD_SIZE + CARD_GAP)))
+  const columns = Math.max(1, Math.floor((width + CARD_GAP) / (FACE_CARD_SIZE + CARD_GAP)))
   const rows = useMemo(() => {
     const sent = new Map((data?.people ?? []).map(p => [p.person, p.items.length]))
     return buildFaceRows(people, columns, sent)
@@ -335,6 +252,9 @@ export function FacesPanel({
 
       {nameUnknown && (
         <UnnamedFaces roots={roots} names={(data?.learned ?? []).map(p => p.name)}
+          doubleClickFullscreen={doubleClickFullscreen}
+          closeViewerOnOutsideClick={closeViewerOnOutsideClick}
+          copyPhoto={copyPhoto}
           onNamed={(filePath, person) => onTagsAdded({
             filePaths: [filePath], people: [person], groups: [], albums: []
           })} />
@@ -375,7 +295,7 @@ export function FacesPanel({
         {!active ? null : loading && !data ? (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {Array.from({ length: 12 }).map((_, i) => (
-              <Skeleton key={i} variant="rounded" width={CARD_SIZE} height={CARD_SIZE} />
+              <Skeleton key={i} variant="rounded" width={FACE_CARD_SIZE} height={FACE_CARD_SIZE} />
             ))}
           </Box>
         ) : data && data.learned.length === 0 ? (
