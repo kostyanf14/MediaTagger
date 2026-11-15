@@ -26,7 +26,7 @@
   },
   "scripts": {
     "start": "vite",
-    "test": "node --experimental-strip-types --test src/remoteUi.test.ts",
+    "test": "node --experimental-strip-types --test src/remoteUi.test.ts src/features.test.ts",
     "build": "tsc && vite build",
     "preview": "vite preview"
   }

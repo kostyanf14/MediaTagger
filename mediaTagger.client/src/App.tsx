@@ -192,6 +192,9 @@ export default function App() {
     setAccess('need-key')
   }), [])
 
+  // A local API skips the key gate, but still has to say which features it offers.
+  useEffect(() => { if (apiIsLocal) void checkServer() }, [])
+
   useEffect(() => {
     if (apiIsLocal) return
     let cancelled = false

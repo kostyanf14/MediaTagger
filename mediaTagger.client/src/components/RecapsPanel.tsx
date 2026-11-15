@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Box, Typography } from '@mui/material'
-import { mediaApi, MediaFile, RecapGroup, RecapItem, THUMB_SIZE } from '../api/client'
+import { Box, Button, Typography } from '@mui/material'
+import { mediaApi, MediaFile, RecapGroup, RecapItem, FEATURES, FEATURE_UNSUPPORTED, THUMB_SIZE } from '../api/client'
+import { isFeatureUnsupported } from '../features'
+import { useFeature } from '../useFeature'
 import { Thumbnail } from './Thumbnail'
 import { LightboxViewer } from './LightboxViewer'
 
@@ -22,16 +24,39 @@ function asFile(item: RecapItem): MediaFile {
 /** Memories from capture dates. Nothing is asked for until the tab is open. */
 export function RecapsPanel({ roots, active, closeViewerOnOutsideClick, copyPhoto }: Props) {
   const [groups, setGroups] = useState<RecapGroup[] | null>(null)
+  const [unsupported, setUnsupported] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [open, setOpen] = useState<{ files: MediaFile[]; file: MediaFile } | null>(null)
+  const recaps = useFeature(FEATURES.recaps)
 
   useEffect(() => {
-    if (!active || !roots.length) return
+    if (!active || !roots.length || recaps !== true) return
     let cancelled = false
+    setUnsupported(false)
+    setFailed(false)
     mediaApi.recaps(roots)
       .then(r => { if (!cancelled) setGroups(r.data) })
-      .catch(() => { if (!cancelled) setGroups([]) })
+      .catch(error => {
+        if (cancelled) return
+        if (isFeatureUnsupported(error)) setUnsupported(true)
+        else setFailed(true)
+      })
     return () => { cancelled = true }
-  }, [active, roots])
+  }, [active, roots, recaps, attempt])
+
+  if (recaps === false || unsupported) {
+    return <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary">{FEATURE_UNSUPPORTED}</Typography></Box>
+  }
+
+  if (failed) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Typography color="text.secondary" sx={{ mb: 1 }}>Не вдалося завантажити спогади.</Typography>
+        <Button size="small" onClick={() => setAttempt(n => n + 1)}>Спробувати знову</Button>
+      </Box>
+    )
+  }
 
   if (!roots.length) {
     return <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary">Оберіть папку</Typography></Box>

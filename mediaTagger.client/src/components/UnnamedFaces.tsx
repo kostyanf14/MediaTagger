@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Box, Button, TextField, Typography } from '@mui/material'
-import { facesApi, FaceSuggestion } from '../api/client'
+import { facesApi, FaceSuggestion, FEATURES, FEATURE_UNSUPPORTED } from '../api/client'
+import { isFeatureUnsupported } from '../features'
+import { useFeature } from '../useFeature'
 import { FaceAvatar } from './FaceAvatar'
 
 interface Props {
@@ -13,17 +15,28 @@ interface Props {
 /** One unnamed photo face at a time. Mounted only while the queue is open, so nothing is fetched before that. */
 export function UnnamedFaces({ roots, names, onNamed }: Props) {
   const [queue, setQueue] = useState<FaceSuggestion[] | null>(null)
+  const [unsupported, setUnsupported] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const unnamed = useFeature(FEATURES.unnamedFaces)
   const current = queue?.[0]
 
   const load = useCallback(() => {
+    setFailed(false)
     facesApi.unnamed(roots)
       .then(r => setQueue(r.data))
-      .catch(() => setQueue([]))
+      .catch(error => {
+        if (isFeatureUnsupported(error)) setUnsupported(true)
+        else setFailed(true)
+      })
   }, [roots])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (unnamed === false) { setUnsupported(true); return }
+    if (unnamed !== true) return
+    load()
+  }, [load, unnamed])
 
   const advance = (rest: FaceSuggestion[]) => {
     setDraft('')
@@ -51,6 +64,23 @@ export function UnnamedFaces({ roots, names, onNamed }: Props) {
       advance(queue!.slice(1))
     } catch { /* keep it */ }
     finally { setBusy(false) }
+  }
+
+  if (unsupported || unnamed === false) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
+        {FEATURE_UNSUPPORTED}
+      </Typography>
+    )
+  }
+
+  if (failed) {
+    return (
+      <Box sx={{ px: 2, py: 1.5 }}>
+        <Typography variant="body2" color="text.secondary">Не вдалося завантажити безіменні обличчя.</Typography>
+        <Button size="small" onClick={() => load()} sx={{ mt: 0.5 }}>Спробувати знову</Button>
+      </Box>
+    )
   }
 
   if (!current) {

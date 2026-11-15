@@ -1,4 +1,8 @@
 import axios from 'axios'
+import { FeatureId, FEATURE_UNSUPPORTED, featureForUrl, offeredFeatures, supports } from '../features'
+
+export { FEATURES, FEATURE_UNSUPPORTED } from '../features'
+export type { FeatureId } from '../features'
 
 // Where the UI calls the API. Electron's runtime value wins (a packaged app
 // pointed at a NAS), then the Vite env, then this machine.
@@ -72,15 +76,44 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(response => response, error => {
   if (!apiIsLocal && axios.isAxiosError(error) && error.response?.status === 401)
     accessDenied.forEach(listener => listener())
+  if (axios.isAxiosError(error) && error.response?.status === 404) {
+    const feature = featureForUrl(error.config?.url ?? '')
+    // A missing route for a feature this server did not offer is not an empty result.
+    if (feature && supports(offeredFeaturesState(), feature) === false)
+      return Promise.reject(Object.assign(new Error(FEATURE_UNSUPPORTED), { featureUnsupported: feature }))
+  }
   return Promise.reject(error)
 })
 
 export type ServerReach = 'open' | 'locked' | 'down'
 
+// null until /health answers. An older API answers without `features`, which is an empty offer.
+let offered: Set<string> | null = null
+const featureListeners = new Set<() => void>()
+
+function offeredFeaturesState(): Set<string> | null {
+  return offered
+}
+
+function noteHealth(body: unknown) {
+  offered = offeredFeatures(body)
+  featureListeners.forEach(listener => listener())
+}
+
+export function onFeatures(listener: () => void): () => void {
+  featureListeners.add(listener)
+  return () => featureListeners.delete(listener)
+}
+
+export function featureSupported(id: FeatureId): boolean | null {
+  return supports(offered, id)
+}
+
 /** `/health` is open on purpose, so the window can tell "needs a key" from "nothing is listening". */
 export async function checkServer(): Promise<ServerReach> {
   try {
     const res = await axios.get(`${API_ORIGIN}/health`, { timeout: 5000 })
+    noteHealth(res.data)
     return res.data?.auth === true ? 'locked' : 'open'
   } catch {
     return 'down'

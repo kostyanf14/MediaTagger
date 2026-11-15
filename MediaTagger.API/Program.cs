@@ -54,6 +54,6 @@ if (gate.Key is null)
 app.UseCors("ElectronPolicy");
 NetworkAccess.UseKeyCheck(app, gate.Key);
 app.UseStaticFiles();
-app.MapGet("/health", () => Results.Ok(new { ok = true, auth = gate.Key != null }));
+app.MapGet("/health", () => Results.Ok(new { ok = true, auth = gate.Key != null, features = ApiFeatures.All }));
 app.MapControllers();
 app.Run();
