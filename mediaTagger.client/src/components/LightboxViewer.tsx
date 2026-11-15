@@ -19,7 +19,8 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
-import { MediaFile, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
+import { MediaFile, apiIsLocal, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
+import { remoteHides } from '../remoteUi'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
 
@@ -76,6 +77,8 @@ export function LightboxViewer({
   closeOnOutsideClick, fullscreen, copyPhoto = true, paused
 }: Props) {
   const { revealInExplorer, openFile, isElectron, copyPhoto: copyPhotoToClipboard } = useElectron()
+  const canReveal = !remoteHides('reveal-in-explorer', apiIsLocal)
+  const canOpenFile = !remoteHides('open-local-file', apiIsLocal)
   const copyPhotoRef = useRef(copyPhotoToClipboard)
   copyPhotoRef.current = copyPhotoToClipboard
   const [copyNote, setCopyNote] = useState<string | null>(null)
@@ -331,7 +334,7 @@ export function LightboxViewer({
             )}
 
             {/* External player — the built-in one cannot decode every codec */}
-            {file.type === 'video' && isElectron && (
+            {file.type === 'video' && isElectron && canOpenFile && (
               <Tooltip title="Відкрити у зовнішньому програвачі">
                 <IconButton size="small" onClick={() => openFile?.(file.filePath)}
                   sx={{ color: 'white' }}>
@@ -341,12 +344,14 @@ export function LightboxViewer({
             )}
 
             {/* Show in folder on disk */}
-            <Tooltip title="Показати у провіднику (диск)">
-              <IconButton size="small" onClick={() => revealInExplorer?.(file.filePath)}
-                sx={{ color: 'white' }}>
-                <FolderOpenIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            {canReveal && (
+              <Tooltip title="Показати у провіднику (диск)">
+                <IconButton size="small" onClick={() => revealInExplorer?.(file.filePath)}
+                  sx={{ color: 'white' }}>
+                  <FolderOpenIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
 
             {/* Show in app gallery */}
             {onShowInApp && (
@@ -493,7 +498,7 @@ export function LightboxViewer({
                 <Typography variant="caption" color="grey.500">
                   {file.fileName}
                 </Typography>
-                {isElectron && (
+                {isElectron && canOpenFile && (
                   <Button
                     variant="contained"
                     startIcon={<OpenInNewIcon />}

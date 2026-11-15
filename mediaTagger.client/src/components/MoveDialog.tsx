@@ -3,7 +3,8 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Typography, Box
 } from '@mui/material'
 import axios from 'axios'
-import { mediaApi, RenameResponse, SortByDateResponse } from '../api/client'
+import { apiIsLocal, mediaApi, RenameResponse, SortByDateResponse } from '../api/client'
+import { remoteHides } from '../remoteUi'
 import { useElectron } from '../hooks/useElectron'
 
 export interface MoveTarget {
@@ -79,7 +80,7 @@ export function MoveDialog({ target, onCancel, onMoved }: Props) {
               value={destination} onChange={e => setDestination(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void submit(false) } }}
             />
-            {isElectron && (
+            {isElectron && !remoteHides('move-pick-folder', apiIsLocal) && (
               <Button onClick={() => void browse()} disabled={busy} sx={{ flexShrink: 0 }}>Обрати</Button>
             )}
           </Box>

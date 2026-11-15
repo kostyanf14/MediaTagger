@@ -12,7 +12,8 @@ import MapIcon from '@mui/icons-material/Map'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ContentPasteIcon from '@mui/icons-material/ContentPaste'
 import DeleteIcon from '@mui/icons-material/DeleteOutline'
-import { MediaFile, FileTags, Coordinates, BulkTagsRequest, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
+import { MediaFile, FileTags, Coordinates, BulkTagsRequest, apiIsLocal, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
+import { remoteHides } from '../remoteUi'
 import { CoordinatePicker } from './CoordinatePicker'
 import { Thumbnail } from './Thumbnail'
 import { PhotoFaces } from './PhotoFaces'
@@ -124,6 +125,8 @@ export function TagsSidePanel({
   const file = selection.length === 1 ? selection[0] : null
   const bulk = selection.length > 1
   const { revealInExplorer, openFile } = useElectron()
+  const canReveal = !remoteHides('reveal-in-explorer', apiIsLocal)
+  const canOpenFile = !remoteHides('open-local-file', apiIsLocal)
   const [tags, setTags] = useState<FileTags>({
     people: [], place: '', groups: [], albums: [], notes: ''
   })
@@ -443,16 +446,20 @@ export function TagsSidePanel({
             <Typography variant="subtitle1" fontWeight={600} noWrap sx={{ flex: 1 }}>
               {file.fileName}
             </Typography>
-            <Tooltip title="Показати у провіднику">
-              <IconButton size="small" onClick={() => revealInExplorer(file.filePath)}>
-                <FolderOpenIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Відкрити файл">
-              <IconButton size="small" onClick={() => openFile(file.filePath)}>
-                <OpenInNewIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            {canReveal && (
+              <Tooltip title="Показати у провіднику">
+                <IconButton size="small" onClick={() => revealInExplorer(file.filePath)}>
+                  <FolderOpenIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {canOpenFile && (
+              <Tooltip title="Відкрити файл">
+                <IconButton size="small" onClick={() => openFile(file.filePath)}>
+                  <OpenInNewIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             <Tooltip title="Видалити з диска (Delete)">
               <IconButton size="small" onClick={() => onDelete([file])}>
                 <DeleteIcon fontSize="small" />

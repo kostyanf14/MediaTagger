@@ -34,6 +34,7 @@ import {
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest, SortByDateResponse,
   checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
+import { remoteHides } from './remoteUi'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
 import { useElectron } from './hooks/useElectron'
 
@@ -595,7 +596,7 @@ export default function App() {
           </Box>
 
           <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            {apiIsLocal && (
+            {!remoteHides('select-library-folder', apiIsLocal) && (
               <Button fullWidth variant="outlined" size="small"
                 startIcon={<FolderIcon />} onClick={handleSelectRoot}>
                 {libraryRoots.length ? 'Додати папку' : 'Відкрити папку'}
