@@ -251,6 +251,9 @@ function rootQuery(root: string | string[], extra?: Record<string, string | numb
 export const THUMB_SIZE = 480
 export const THUMB_SIZE_SMALL = 160
 
+export interface RecapItem { filePath: string; fileName: string; type: 'image' | 'video'; taken: string }
+export interface RecapGroup { id: string; title: string; count: number; items: RecapItem[] }
+
 export const mediaApi = {
   getFiles: (folderPath: string, recursive = false) =>
     api.get<MediaFile[]>('/media/files', { params: { folderPath, recursive } }),
@@ -284,6 +287,8 @@ export const mediaApi = {
     api.get<MediaFile[]>('/media/map-files', { params: rootQuery(roots) }),
   getLibraryStats: (roots: string | string[]) =>
     api.get<LibraryStats>('/media/library-stats', { params: rootQuery(roots) }),
+  recaps: (roots: string | string[]) =>
+    api.get<RecapGroup[]>('/media/recaps', { params: rootQuery(roots) }),
 
   // Thumbnail — JPEG for all formats (HEIC converted, video frame extracted).
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which

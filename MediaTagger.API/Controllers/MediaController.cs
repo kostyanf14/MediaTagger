@@ -62,6 +62,26 @@ public class MediaController : ControllerBase
     [HttpGet("scan-progress")]
     public ActionResult<ScanProgressSnapshot> GetScanProgress() => Ok(_progress.Snapshot());
 
+    /// <summary>Memories such as this day in other years. Only files with a capture date are included.</summary>
+    [HttpGet("recaps")]
+    public ActionResult<IReadOnlyList<RecapBuilder.Group>> GetRecaps([FromQuery] string[] rootPath)
+    {
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        var shots = new List<RecapBuilder.Shot>();
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (var file in _fs.GetMediaFiles(root, recursive: true))
+            {
+                var taken = file.Tags.DateTaken ?? file.Exif?.DateTaken;
+                if (taken == null) continue;
+                shots.Add(new RecapBuilder.Shot(file.FilePath, file.FileName, file.Type, taken.Value));
+            }
+        }
+        return Ok(RecapBuilder.Build(shots, DateTime.Now));
+    }
+
     /// <summary>Lets the client skip a remembered folder whose drive is not plugged in.</summary>
     [HttpGet("folder-exists")]
     public ActionResult<bool> FolderExists([FromQuery] string folderPath)
