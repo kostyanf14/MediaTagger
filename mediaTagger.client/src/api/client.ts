@@ -324,6 +324,11 @@ export const facesApi = {
     api.post<number>('/faces/accept', { items, applyTags }),
   reject: (items: FaceDecision[]) =>
     api.post<number>('/faces/reject', items),
+  // Asked for only after the user opens the unnamed queue. Photos, and only a handful.
+  unnamed: (roots: string | string[], limit = 12) =>
+    api.get<FaceSuggestion[]>('/faces/unnamed', { params: rootQuery(roots, { limit }) }),
+  skipUnnamed: (faceIds: number[]) =>
+    api.post('/faces/unnamed/skip', faceIds),
   // One name, or several folded into one. Tags under the roots and confirmed faces both move.
   renamePeople: (roots: string | string[], from: string[], to: string) =>
     api.post<number>('/faces/people', { rootPaths: asRoots(roots), from, to }),

@@ -21,6 +21,9 @@ public sealed record DetectedFace(float X, float Y, float W, float H, float Scor
 /// </summary>
 public sealed record StoredFileFaces(long Size, long Mtime, int Width, int Height, StoredFace[] Faces, int Method = 1);
 
+/// <summary>One unnamed photo face, with the path the thumbnail API can open.</summary>
+public sealed record UnnamedPhoto(string FilePath, StoredFace Face, int Width, int Height);
+
 /// <summary>
 /// Remembers the faces found in each file, plus what the user has said about them.
 /// Finding faces costs a fraction of a second per photo, so — like the EXIF cache —
@@ -46,6 +49,7 @@ public class FaceStore : IDisposable
     private readonly ConcurrentDictionary<long, string> _labels = new();
     // Suggestions the user turned down; never offered again for that face.
     private readonly ConcurrentDictionary<(long FaceId, string Person), byte> _rejections = new();
+    private readonly ConcurrentDictionary<long, byte> _unnamedSkips = new();
 
     private long _version;
 
@@ -100,6 +104,8 @@ public class FaceStore : IDisposable
                 PRIMARY KEY (face_id, person)
             )
             """);
+        // A face the user passed over in the unnamed queue. Lost if that file is analysed again.
+        Execute("CREATE TABLE IF NOT EXISTS unnamed_skips (face_id INTEGER PRIMARY KEY)");
 
         Load();
         _logger.LogInformation("Face store: {Path} ({Files} files, {Faces} faces)",
@@ -141,9 +147,10 @@ public class FaceStore : IDisposable
             foreach (var id in oldIds)
             {
                 using var drop = Command(
-                    "DELETE FROM labels WHERE face_id = $id; DELETE FROM rejections WHERE face_id = $id; DELETE FROM faces WHERE id = $id", tx);
+                    "DELETE FROM labels WHERE face_id = $id; DELETE FROM rejections WHERE face_id = $id; DELETE FROM unnamed_skips WHERE face_id = $id; DELETE FROM faces WHERE id = $id", tx);
                 drop.Parameters.AddWithValue("$id", id);
                 drop.ExecuteNonQuery();
+                _unnamedSkips.TryRemove(id, out _);
             }
 
             using (var upsert = Command("""
@@ -513,6 +520,65 @@ public class FaceStore : IDisposable
         using (var command = Command("SELECT face_id, person FROM rejections"))
         using (var reader = command.ExecuteReader())
             while (reader.Read()) _rejections[(reader.GetInt64(0), reader.GetString(1))] = 0;
+
+        using (var command = Command("SELECT face_id FROM unnamed_skips"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) _unnamedSkips[reader.GetInt64(0)] = 0;
+    }
+
+    /// <summary>
+    /// Faces with no name, from photos only. <paramref name="roots"/> are library folders.
+    /// The stored path is lowercased, which Windows still opens.
+    /// </summary>
+    public List<UnnamedPhoto> UnnamedPhotos(IReadOnlyList<string> roots, int limit)
+    {
+        var scopes = new List<(string Volume, string Rel, string VolumeRoot)>();
+        foreach (var root in roots)
+        {
+            string full;
+            try { full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)); }
+            catch { continue; }
+            var key = VolumeKey.For(full);
+            var rel = key.Path.TrimEnd('\\', '/');
+            var volumeRoot = rel.Length == 0 ? full + Path.DirectorySeparatorChar : full[..^rel.Length];
+            scopes.Add((key.Volume, rel, volumeRoot));
+        }
+
+        var hits = new List<UnnamedPhoto>();
+        var seen = new HashSet<long>();
+        foreach (var (key, stored) in _files)
+        {
+            (string Volume, string Rel, string VolumeRoot)? scope = null;
+            foreach (var candidate in scopes)
+                if (candidate.Volume == key.Volume && UnnamedFaceRules.UnderRoot(key.Path, candidate.Rel))
+                { scope = candidate; break; }
+            if (scope == null) continue;
+            var filePath = scope.Value.VolumeRoot + key.Path;
+            foreach (var face in stored.Faces)
+            {
+                if (!seen.Add(face.Id)) continue;
+                if (!UnnamedFaceRules.IsQueuePhoto(face.Time, _labels.ContainsKey(face.Id), _unnamedSkips.ContainsKey(face.Id)))
+                    continue;
+                hits.Add(new UnnamedPhoto(filePath, face, stored.Width, stored.Height));
+            }
+        }
+        return hits.OrderByDescending(h => h.Face.W * h.Face.H).Take(limit).ToList();
+    }
+
+    public void SkipUnnamed(IEnumerable<long> faceIds)
+    {
+        lock (_gate)
+        {
+            using var tx = _connection.BeginTransaction();
+            foreach (var id in faceIds.Distinct())
+            {
+                using var command = Command("INSERT OR IGNORE INTO unnamed_skips (face_id) VALUES ($id)", tx);
+                command.Parameters.AddWithValue("$id", id);
+                command.ExecuteNonQuery();
+                _unnamedSkips[id] = 0;
+            }
+            tx.Commit();
+        }
     }
 
     private SqliteCommand Command(string sql, SqliteTransaction? tx = null)
