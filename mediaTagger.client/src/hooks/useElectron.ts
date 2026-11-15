@@ -10,8 +10,9 @@ declare global {
       openFile: (filePath: string) => void
       copyImage: (payload: { filePath?: string; dataUrl?: string }) => Promise<boolean>
       isElectron: boolean
-      /** Set when this window was launched with MEDIATAGGER_API_URL. */
+      /** Set when this window was launched with MEDIATAGGER_API_URL or a saved address. */
       apiOrigin?: string
+      setApiOrigin?: (origin: string) => Promise<string>
     }
   }
 }
@@ -37,6 +38,8 @@ export function useElectron() {
 
   return {
     isElectron,
+    apiOrigin: api?.apiOrigin || '',
+    setApiOrigin: api?.setApiOrigin,
     selectFolder: () => api?.selectFolder() ?? Promise.resolve(null),
     startNativeDrag: (filePath: string, previewDataUrl?: string) =>
       api?.startNativeDrag(filePath, previewDataUrl),

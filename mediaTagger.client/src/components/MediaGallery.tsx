@@ -16,7 +16,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
-import { MediaFile, mediaApi, THUMB_SIZE } from '../api/client'
+import { MediaFile, apiIsLocal, mediaApi, THUMB_SIZE } from '../api/client'
+import { remoteHides } from '../remoteUi'
 import { FileGroup, GroupField, SortDir, SortField } from '../utils/mediaOrder'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -123,17 +124,18 @@ interface TileProps {
   onDoubleClick: (file: MediaFile) => void
   onDragStart: (e: React.DragEvent, file: MediaFile) => void
   onMenu: (e: React.MouseEvent<HTMLElement>, file: MediaFile) => void
+  canDrag: boolean
 }
 
 // Memoised so that selecting one photo re-renders that tile, not the whole screen.
-const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleClick, onDragStart, onMenu }: TileProps) {
+const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleClick, onDragStart, onMenu, canDrag }: TileProps) {
   const labels = file.tags.people.length > 0 ? file.tags.people : file.tags.albums
   return (
     <TileRoot
-      draggable
+      draggable={canDrag}
       data-selected={selected}
       data-dragging={dragging}
-      onDragStart={e => onDragStart(e, file)}
+      onDragStart={e => { if (canDrag) onDragStart(e, file) }}
       onClick={e => onClick(e, file)}
       onDoubleClick={() => onDoubleClick(file)}
     >
@@ -157,14 +159,15 @@ const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleCli
         </Box>
       )}
 
-      {/* Drag hint */}
-      <Box className="drag-hint" sx={{
-        position: 'absolute', top: 4, left: 4,
-        opacity: 0, transition: 'opacity 0.2s',
-        bgcolor: 'rgba(0,0,0,0.6)', borderRadius: 1, p: 0.3
-      }}>
-        <DragIndicatorIcon sx={{ fontSize: 16, color: 'white' }} />
-      </Box>
+      {canDrag && (
+        <Box className="drag-hint" sx={{
+          position: 'absolute', top: 4, left: 4,
+          opacity: 0, transition: 'opacity 0.2s',
+          bgcolor: 'rgba(0,0,0,0.6)', borderRadius: 1, p: 0.3
+        }}>
+          <DragIndicatorIcon sx={{ fontSize: 16, color: 'white' }} />
+        </Box>
+      )}
 
       {/* Context menu button */}
       <IconButton
@@ -208,6 +211,9 @@ export function MediaGallery({
   selectedPaths, onSelectionChange, onDoubleClick, onDelete, onRename, onMove
 }: Props) {
   const { startNativeDrag, isElectron, revealInExplorer, openFile } = useElectron()
+  const canDrag = !remoteHides('native-drag', apiIsLocal)
+  const canOpenFile = !remoteHides('open-local-file', apiIsLocal)
+  const canReveal = !remoteHides('reveal-in-explorer', apiIsLocal)
   const [draggingPath, setDraggingPath] = useState<string | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; file: MediaFile } | null>(null)
   // Held in state, not a ref: the scroller only exists once there are files to show,
@@ -401,6 +407,7 @@ export function MediaGallery({
                         onDoubleClick={onDoubleClick}
                         onDragStart={handleDragStart}
                         onMenu={handleMenuOpen}
+                        canDrag={canDrag}
                       />
                     ))}
                   </div>
@@ -425,12 +432,16 @@ export function MediaGallery({
         onClose={() => setMenuAnchor(null)}
         onClick={() => setMenuAnchor(null)}
       >
-        <MenuItem onClick={() => menuAnchor && openFile?.(menuAnchor.file.filePath)}>
-          <OpenInNewIcon fontSize="small" sx={{ mr: 1 }} /> Відкрити
-        </MenuItem>
-        <MenuItem onClick={() => menuAnchor && revealInExplorer?.(menuAnchor.file.filePath)}>
-          <FolderOpenIcon fontSize="small" sx={{ mr: 1 }} /> Показати у провіднику
-        </MenuItem>
+        {canOpenFile && (
+          <MenuItem onClick={() => menuAnchor && openFile?.(menuAnchor.file.filePath)}>
+            <OpenInNewIcon fontSize="small" sx={{ mr: 1 }} /> Відкрити
+          </MenuItem>
+        )}
+        {canReveal && (
+          <MenuItem onClick={() => menuAnchor && revealInExplorer?.(menuAnchor.file.filePath)}>
+            <FolderOpenIcon fontSize="small" sx={{ mr: 1 }} /> Показати у провіднику
+          </MenuItem>
+        )}
         <MenuItem onClick={() => { if (menuAnchor) onRename(menuAnchor.file) }}>
           <DriveFileRenameOutlineIcon fontSize="small" sx={{ mr: 1 }} /> Перейменувати
         </MenuItem>

@@ -157,6 +157,37 @@ public class FacesController : ControllerBase
         return Ok(folders);
     }
 
+    /// <summary>Unnamed faces from photos in the library. Not called until the user opens that queue.</summary>
+    [HttpGet("unnamed")]
+    public ActionResult<List<FaceSuggestion>> Unnamed([FromQuery] string[] rootPath, [FromQuery] int limit = 12)
+    {
+        var roots = FileSystemService.Collapse(rootPath);
+        if (roots.Length == 0) return BadRequest("Folder not found");
+        var faces = _store.UnnamedPhotos(roots, Math.Clamp(limit, 1, 24));
+        return Ok(faces.Select(item => new FaceSuggestion
+        {
+            FaceId = item.Face.Id,
+            FilePath = item.FilePath,
+            FileName = Path.GetFileName(item.FilePath),
+            Type = "image",
+            X = item.Face.X,
+            Y = item.Face.Y,
+            W = item.Face.W,
+            H = item.Face.H,
+            Score = item.Face.Score,
+            Width = item.Width,
+            Height = item.Height
+        }).ToList());
+    }
+
+    /// <summary>Drops faces from the unnamed queue without naming them.</summary>
+    [HttpPost("unnamed/skip")]
+    public ActionResult SkipUnnamed([FromBody] List<long> faceIds)
+    {
+        _store.SkipUnnamed(faceIds ?? new List<long>());
+        return Ok();
+    }
+
     /// <summary>Turns down suggestions, so the same face is not offered as that person again.</summary>
     [HttpPost("reject")]
     public ActionResult<int> Reject([FromBody] List<FaceDecision> items)

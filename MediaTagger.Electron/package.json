@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
+    "test": "node --test apiOrigin.test.js",
     "build": "electron-builder"
   },
   "dependencies": {},

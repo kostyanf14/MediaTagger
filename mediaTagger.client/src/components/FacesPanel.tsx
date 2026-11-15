@@ -15,6 +15,7 @@ import {
 } from '../api/client'
 import { FaceAvatar } from './FaceAvatar'
 import { LightboxViewer } from './LightboxViewer'
+import { UnnamedFaces } from './UnnamedFaces'
 
 // Often enough that the counter visibly moves, rare enough to stay out of the scan's way.
 const STATUS_POLL_MS = 1500
@@ -150,6 +151,8 @@ export function FacesPanel({
   const [decided, setDecided] = useState<Set<number>>(new Set())
   const [applyingAll, setApplyingAll] = useState(false)
   const [openFile, setOpenFile] = useState<MediaFile | null>(null)
+  // Off until asked: the unnamed queue is a separate request and is not part of the suggestion load.
+  const [nameUnknown, setNameUnknown] = useState(false)
   const [openFullscreen, setOpenFullscreen] = useState(false)
   const applyingAllRef = useRef(false)
   const loadedFor = useRef<string | null>(null)
@@ -317,6 +320,10 @@ export function FacesPanel({
               {data ? `Облич у бібліотеці: ${data.facesTotal.toLocaleString('uk-UA')}` : 'Обличчя'}
             </Typography>
             <Button size="small" onClick={startScan}>Шукати нові фото</Button>
+            <Button size="small" variant={nameUnknown ? 'contained' : 'text'}
+              onClick={() => setNameUnknown(v => !v)}>
+              Безіменні
+            </Button>
             <Tooltip title="Оновити підказки">
               <IconButton size="small" onClick={() => load()}>
                 <RefreshIcon fontSize="small" />
@@ -325,6 +332,13 @@ export function FacesPanel({
           </Box>
         )}
       </Box>
+
+      {nameUnknown && (
+        <UnnamedFaces roots={roots} names={(data?.learned ?? []).map(p => p.name)}
+          onNamed={(filePath, person) => onTagsAdded({
+            filePaths: [filePath], people: [person], groups: [], albums: []
+          })} />
+      )}
 
       {/* Who the model has learned so far */}
       {data && data.learned.length > 0 && (

@@ -14,6 +14,7 @@ import HistoryIcon from '@mui/icons-material/History'
 import CollectionsIcon from '@mui/icons-material/Collections'
 import FaceIcon from '@mui/icons-material/Face'
 import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import SettingsIcon from '@mui/icons-material/Settings'
 import { FolderTreeNode } from './components/FolderTree'
 import { MediaGallery } from './components/MediaGallery'
@@ -27,12 +28,15 @@ import { RenameDialog, RenameTarget } from './components/RenameDialog'
 import { MoveDialog, MoveTarget, SortFolderDialog } from './components/MoveDialog'
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
+import { RecapsPanel } from './components/RecapsPanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ServerConnect } from './components/ServerConnect'
 import {
   mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress, RenameResponse,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest, SortByDateResponse,
   checkServer, unlockServer, onAccessDenied, readAccessKey
 } from './api/client'
+import { remoteHides } from './remoteUi'
 import { sortFiles, groupFiles, SortField, SortDir, GroupField } from './utils/mediaOrder'
 import { useElectron } from './hooks/useElectron'
 
@@ -187,6 +191,9 @@ export default function App() {
     setKeyError('Ключ не підходить')
     setAccess('need-key')
   }), [])
+
+  // A local API skips the key gate, but still has to say which features it offers.
+  useEffect(() => { if (apiIsLocal) void checkServer() }, [])
 
   useEffect(() => {
     if (apiIsLocal) return
@@ -542,6 +549,7 @@ export default function App() {
             display: 'flex', flexDirection: 'column', gap: 1.5
           }}>
             <Typography variant="h6">Підключення до сервера</Typography>
+            <ServerConnect />
             {access === 'checking' && (
               <Typography color="text.secondary">Перевірка сервера…</Typography>
             )}
@@ -593,7 +601,7 @@ export default function App() {
           </Box>
 
           <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            {apiIsLocal && (
+            {!remoteHides('select-library-folder', apiIsLocal) && (
               <Button fullWidth variant="outlined" size="small"
                 startIcon={<FolderIcon />} onClick={handleSelectRoot}>
                 {libraryRoots.length ? 'Додати папку' : 'Відкрити папку'}
@@ -710,6 +718,8 @@ export default function App() {
                 label="Обличчя" sx={{ minHeight: 44, py: 0 }} />
               <Tab icon={<AddLocationAltIcon fontSize="small" />} iconPosition="start"
                 label="Місця" sx={{ minHeight: 44, py: 0 }} />
+              <Tab icon={<AutoAwesomeIcon fontSize="small" />} iconPosition="start"
+                label="Спогади" sx={{ minHeight: 44, py: 0 }} />
             </Tabs>
             <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
             {tab === 0 && (
@@ -798,6 +808,12 @@ export default function App() {
               <Box sx={{ display: tab === 4 ? 'block' : 'none', height: '100%' }}>
                 <PlacesPanel roots={libraryRoots} refreshKey={tagsVersion}
                   active={tab === 4} onTagsAdded={handleTagsSaved} />
+              </Box>
+
+              <Box sx={{ display: tab === 5 ? 'block' : 'none', height: '100%' }}>
+                <RecapsPanel roots={libraryRoots} active={tab === 5}
+                  closeViewerOnOutsideClick={!!settings.closeViewerOnOutsideClick}
+                  copyPhoto={settings.copyPhotoOnCtrlC !== false} />
               </Box>
             </Box>
 
