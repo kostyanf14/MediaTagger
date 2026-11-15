@@ -530,7 +530,8 @@ public class FaceStore : IDisposable
     /// Faces with no name, from photos only. <paramref name="files"/> are the library's own paths,
     /// so the crop keeps the case the disk uses. The stored key is lowercased and a NAS will not open it.
     /// </summary>
-    public List<UnnamedPhoto> UnnamedPhotos(IEnumerable<(string Path, long Size, long Mtime)> files, int limit)
+    public List<UnnamedPhoto> UnnamedPhotos(IEnumerable<(string Path, long Size, long Mtime)> files,
+        IReadOnlySet<long> namedOrProposed, int limit)
     {
         var hits = new List<UnnamedPhoto>();
         var seen = new HashSet<long>();
@@ -541,7 +542,8 @@ public class FaceStore : IDisposable
             foreach (var face in stored.Faces)
             {
                 if (!seen.Add(face.Id)) continue;
-                if (!UnnamedFaceRules.IsQueuePhoto(face.Time, _labels.ContainsKey(face.Id), _unnamedSkips.ContainsKey(face.Id)))
+                if (!UnnamedFaceRules.IsUnnamed(face.Time, face.Score, _labels.ContainsKey(face.Id),
+                        namedOrProposed.Contains(face.Id), _unnamedSkips.ContainsKey(face.Id)))
                     continue;
                 hits.Add(new UnnamedPhoto(file.Path, face, stored.Width, stored.Height));
             }

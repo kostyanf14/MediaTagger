@@ -32,12 +32,6 @@ public class FaceRecognitionService
     private const int BootstrapMinPhotos = 3;
     /// <summary>How much more a placed face must resemble someone else before it is taken back.</summary>
     private const float ConflictMargin = 0.1f;
-    /// <summary>
-    /// Detector confidence below this means a profile, motion blur or a face half out of
-    /// frame. Such faces all look alike to the embedding model, so they would only
-    /// produce confident nonsense; they are kept in the store but not used.
-    /// </summary>
-    private const float MinDetectionScore = 0.72f;
     private const int AssignRounds = 3;
     /// <summary>A person's cover is the clearest of their this many most recent faces.</summary>
     private const int RecentCoverCandidates = 10;
@@ -101,6 +95,15 @@ public class FaceRecognitionService
             Learned = model.Learned,
             FacesTotal = model.FacesTotal
         };
+    }
+
+    /// <summary>Faces the model already named or would offer as a suggestion. The unnamed queue skips them.</summary>
+    public async Task<HashSet<long>> NamedOrProposedFaceIdsAsync(IReadOnlyList<string> roots)
+    {
+        var model = await GetModelAsync(roots);
+        var ids = new HashSet<long>(model.Assigned.Keys);
+        foreach (var suggestion in model.Suggestions) ids.Add(suggestion.FaceId);
+        return ids;
     }
 
     /// <summary>Every face in one file, with who it is (or might be).</summary>
@@ -180,6 +183,13 @@ public class FaceRecognitionService
         }
         finally { _buildGate.Release(); }
     }
+
+    /// <summary>
+    /// Detector confidence below <see cref="UnnamedFaceRules.MinDetectionScore"/> means a profile,
+    /// motion blur or a face half out of frame. Such faces all look alike to the embedding model,
+    /// so they would only produce confident nonsense; they are kept in the store but not used.
+    /// </summary>
+    private static bool IsUsable(StoredFace face) => face.Score >= UnnamedFaceRules.MinDetectionScore;
 
     private bool IsUsable(Model? model, string root, (long Store, long Tags) version)
     {
@@ -562,8 +572,6 @@ public class FaceRecognitionService
         for (var i = 0; i < used; i++) sum += top[i];
         return sum / used;
     }
-
-    private static bool IsUsable(StoredFace face) => face.Score >= MinDetectionScore;
 
     private static float Similarity(float[] a, float[] b) => TensorPrimitives.Dot<float>(a, b);
 }

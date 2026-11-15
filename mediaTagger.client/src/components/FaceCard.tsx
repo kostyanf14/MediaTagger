@@ -35,7 +35,7 @@ function FaceContext({ item }: { item: FaceSuggestion }) {
         border: '2px solid', borderColor: 'warning.main', borderRadius: 0.5
       }} />
       <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-        {item.fileName} · схожість {Math.round(item.score * 100)}%
+        {item.fileName}{item.person ? ` · схожість ${Math.round(item.score * 100)}%` : ''}
       </Typography>
     </Box>
   )
@@ -57,7 +57,7 @@ export function FaceHover({ item, size = FACE_CARD_SIZE, onOpen, children }: {
         componentsProps={{ tooltip: { sx: { maxWidth: 'none', p: 1 } } }}>
         <Box>
           <FaceAvatar filePath={item.filePath} box={item} size={size} variant="rounded"
-            sx={{ border: '2px solid', borderColor: scoreColor(item.score) }} />
+            sx={{ border: '2px solid', borderColor: item.person ? scoreColor(item.score) : 'divider' }} />
         </Box>
       </Tooltip>
       {children}

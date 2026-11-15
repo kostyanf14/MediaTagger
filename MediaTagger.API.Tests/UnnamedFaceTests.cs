@@ -13,6 +13,9 @@ public class UnnamedFaceTests
         Assert.False(UnnamedFaceRules.IsQueuePhoto(2.5, labelled: false, skipped: false));
         Assert.False(UnnamedFaceRules.IsQueuePhoto(null, labelled: true, skipped: false));
         Assert.False(UnnamedFaceRules.IsQueuePhoto(null, labelled: false, skipped: true));
+        Assert.False(UnnamedFaceRules.IsUnnamed(null, 0.8f, labelled: false, proposed: true, skipped: false));
+        Assert.True(UnnamedFaceRules.IsUnnamed(null, 0.8f, labelled: false, proposed: false, skipped: false));
+        Assert.False(UnnamedFaceRules.IsUnnamed(null, 0.5f, labelled: false, proposed: false, skipped: false));
     }
 
     [Fact]
