@@ -5,6 +5,7 @@ import {
   Autocomplete, TextField
 } from '@mui/material'
 import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi } from '../api/client'
+import { ServerConnect } from './ServerConnect'
 
 const VIDEO_MODES: { value: VideoFaceMode; label: string; hint: string }[] = [
   { value: 'Frames', label: 'Усе відео', hint: 'Кадр кожні ~2 с, до 16 на відео. Знаходить і тих, хто з\'являється посередині.' },
@@ -59,6 +60,16 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle>Налаштування</DialogTitle>
       <DialogContent>
+        <Typography variant="subtitle2" gutterBottom>Сервер</Typography>
+        <Box sx={{ mt: 1 }}>
+          <ServerConnect />
+        </Box>
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          Адреса API на NAS. Шлях до фото має бути таким, яким його бачить сервер.
+        </Typography>
+
+        <Divider sx={{ my: 2 }} />
+
         <Typography variant="subtitle2" gutterBottom>Фотограф за замовчуванням</Typography>
         <Autocomplete
           freeSolo

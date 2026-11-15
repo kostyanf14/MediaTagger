@@ -28,6 +28,7 @@ import { MoveDialog, MoveTarget, SortFolderDialog } from './components/MoveDialo
 import { FacesPanel } from './components/FacesPanel'
 import { PlacesPanel } from './components/PlacesPanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ServerConnect } from './components/ServerConnect'
 import {
   mediaApi, settingsApi, facesApi, apiIsLocal, AppSettings, ScanProgress, RenameResponse,
   MediaFile, FileTags, FolderNode, AllTagsResponse, SearchRequest, BulkTagsRequest, SortByDateResponse,
@@ -542,6 +543,7 @@ export default function App() {
             display: 'flex', flexDirection: 'column', gap: 1.5
           }}>
             <Typography variant="h6">Підключення до сервера</Typography>
+            <ServerConnect />
             {access === 'checking' && (
               <Typography color="text.secondary">Перевірка сервера…</Typography>
             )}

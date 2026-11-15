@@ -27,5 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
 
   // Empty when unset, so the page can fall back to its own default.
-  apiOrigin: process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || ''
+  apiOrigin: process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || '',
+
+  // Saves the address and reloads the window when it changes. Empty is this PC.
+  setApiOrigin: (origin) => ipcRenderer.invoke('set-api-origin', origin)
 })

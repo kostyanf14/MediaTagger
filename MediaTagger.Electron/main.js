@@ -4,22 +4,32 @@ const { spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
 const https = require('https')
+const { apiHostIsLocal, normalizeApiOrigin } = require('./apiOrigin')
 
 let mainWindow
 let dotnetProcess
 
-const API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || 'http://localhost:5001').replace(/\/$/, '')
+// Empty until whenReady reads a saved address. An env var set at launch wins.
+let API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || '').replace(/\/$/, '')
 const CLIENT_URL = process.env.NODE_ENV === 'development'
   ? (process.env.MEDIATAGGER_CLIENT_URL || 'http://localhost:3000')
   : `file://${path.join(__dirname, '../mediaTagger.client/build/index.html')}`
 
 function isLoopback(url) {
-  try {
-    const host = new URL(url).hostname
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
-  } catch {
-    return true
-  }
+  return apiHostIsLocal(url)
+}
+
+function originFile() {
+  return path.join(app.getPath('userData'), 'api-origin')
+}
+
+function readSavedOrigin() {
+  try { return normalizeApiOrigin(fs.readFileSync(originFile(), 'utf8')) || '' } catch { return '' }
+}
+
+function applyApiOrigin(origin) {
+  API_URL = origin
+  process.env.MEDIATAGGER_API_URL = origin
 }
 
 function normFingerprint(value) {
@@ -245,6 +255,29 @@ ipcMain.handle('copy-image', (_event, { filePath, dataUrl } = {}) => {
   return true
 })
 
+ipcMain.handle('set-api-origin', async (_event, raw) => {
+  const next = normalizeApiOrigin(raw)
+  if (!next) throw new Error('bad origin')
+  const file = originFile()
+  if (isLoopback(next)) {
+    try { fs.unlinkSync(file) } catch { /* nothing saved yet */ }
+  } else {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, next)
+  }
+  const previous = API_URL
+  applyApiOrigin(next)
+  if (!isLoopback(next)) {
+    dotnetProcess?.kill()
+    dotnetProcess = null
+  } else if (process.env.NODE_ENV !== 'development' && !dotnetProcess) {
+    startDotnetApi()
+    try { await waitForApi() } catch { /* the window reloads either way */ }
+  }
+  if (previous !== next) mainWindow?.webContents.reload()
+  return next
+})
+
 ipcMain.on('open-file', (event, filePath) => {
   shell.openPath(filePath).then(err => {
     // Resolves with a non-empty string when nothing could open the file.
@@ -253,6 +286,7 @@ ipcMain.on('open-file', (event, filePath) => {
 })
 
 app.whenReady().then(async () => {
+  if (!API_URL) applyApiOrigin(readSavedOrigin() || 'http://localhost:5001')
   // A remote API (the NAS) is already running; only a loopback URL is started here.
   if (process.env.NODE_ENV !== 'development' && isLoopback(API_URL)) startDotnetApi()
   await createWindow()
