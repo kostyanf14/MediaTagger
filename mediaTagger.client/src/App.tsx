@@ -301,10 +301,6 @@ export default function App() {
   const openFolder = useCallback(async (path: string, currentSettings?: AppSettings) => {
     const folder = normalizeFolder(path)
     if (!folder) return
-    setRootPath(folder)
-    setCurrentFolder(folder)
-    loadFolderTree(folder)
-    loadFiles(folder)
     const base = currentSettings ?? settings
     // The folder on screen is already a root, even when it was never written into
     // libraryFolders. Forgetting it here is what made a new path replace the old one,
@@ -317,9 +313,15 @@ export default function App() {
       libraryFolders.push(normalized)
     }
     const next = { ...base, libraryFolders }
+    // The API only serves folders that are in the library, so this one is saved before
+    // anything is read from it.
+    await saveSettings(addToRecent(folder, next))
+    setRootPath(folder)
+    setCurrentFolder(folder)
+    loadFolderTree(folder)
+    loadFiles(folder)
     loadAllTags(libraryFolders)
     facesApi.scan(libraryFolders).catch(() => {})
-    saveSettings(addToRecent(folder, next))
   }, [settings, rootPath, addToRecent, saveSettings, loadFolderTree, loadFiles, loadAllTags])
 
   const addRoot = (path: string) => openFolder(path)

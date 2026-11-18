@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics.Tensors;
 using MediaTagger.API.Models;
 
@@ -53,14 +54,50 @@ public class FaceRecognitionService
     private Model? _model;
     private long _tagsVersion;
 
-    public FaceRecognitionService(FileSystemService fs, FaceStore store, FaceIndexer indexer, TagsService tags)
+    // What the model last saw of each folder's people tags. Tags that do not change who is
+    // in a photo - an album, a place, a note - leave the model as it is.
+    private readonly ConcurrentDictionary<string, int> _peopleSeen = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _rebuildGate = new();
+    private bool _rebuilding;
+    private readonly ILogger<FaceRecognitionService>? _logger;
+
+    public FaceRecognitionService(FileSystemService fs, FaceStore store, FaceIndexer indexer, TagsService tags,
+        ILogger<FaceRecognitionService>? logger = null)
     {
         _fs = fs;
         _store = store;
         _indexer = indexer;
         _tags = tags;
-        _tags.FolderChanged += _ => Interlocked.Increment(ref _tagsVersion);
+        _logger = logger;
+        _tags.FolderWritten += OnFolderWritten;
     }
+
+    private void OnFolderWritten(string folder, TagsFile written)
+    {
+        var hash = PeopleHash(written);
+        var key = Path.TrimEndingDirectorySeparator(folder);
+        // A folder the model has not seen yet counts as changed.
+        if (_peopleSeen.TryGetValue(key, out var before) && before == hash) return;
+        _peopleSeen[key] = hash;
+        Interlocked.Increment(ref _tagsVersion);
+    }
+
+    /// <summary>Who is tagged on which file, as one number; blind to everything else in the tags.</summary>
+    internal static int PeopleHash(TagsFile file)
+    {
+        var hash = new HashCode();
+        foreach (var (name, tags) in file.Files.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (tags.People.Count == 0) continue;
+            hash.Add(name, StringComparer.OrdinalIgnoreCase);
+            foreach (var person in tags.People.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                hash.Add(person.Trim(), StringComparer.OrdinalIgnoreCase);
+        }
+        return hash.ToHashCode();
+    }
+
+    /// <summary>The version the model is built for; exposed so tests can see what moves it.</summary>
+    internal long TagsVersion => Interlocked.Read(ref _tagsVersion);
 
     /// <summary>A file with faces: the usable ones, and how many were detected in all.</summary>
     private sealed record Entry(MediaFile File, StoredFace[] Faces, int Detected, int Width, int Height, HashSet<string> People);
@@ -84,7 +121,11 @@ public class FaceRecognitionService
     public async Task<FaceSuggestionsResponse> GetSuggestionsAsync(IReadOnlyList<string> roots, int perPerson)
     {
         var model = await GetModelAsync(roots);
+        // The model may be a little behind. An answer given since it was built - a face
+        // accepted, or turned down - is not offered again in the meantime.
         var groups = model.Suggestions
+            .Where(s => !_store.IsRejected(s.FaceId, s.Person)
+                && !string.Equals(_store.GetLabel(s.FaceId), s.Person, StringComparison.OrdinalIgnoreCase))
             .GroupBy(s => s.Person, StringComparer.OrdinalIgnoreCase)
             .Select(g => new PersonSuggestions
             {
@@ -99,7 +140,8 @@ public class FaceRecognitionService
         {
             People = groups,
             Learned = model.Learned,
-            FacesTotal = model.FacesTotal
+            FacesTotal = model.FacesTotal,
+            Building = model.Version != CurrentVersion
         };
     }
 
@@ -166,6 +208,14 @@ public class FaceRecognitionService
         var model = _model;
         if (IsUsable(model, scope, version)) return model!;
 
+        // A model for this library that is only behind is still a good answer. It is
+        // served as it is while one rebuild catches up, instead of making whoever asks wait.
+        if (model != null && string.Equals(model.Root, scope, StringComparison.OrdinalIgnoreCase))
+        {
+            RebuildInBackground(roots, scope);
+            return model;
+        }
+
         await _buildGate.WaitAsync();
         try
         {
@@ -174,11 +224,56 @@ public class FaceRecognitionService
             version = CurrentVersion;
             if (IsUsable(model, scope, version)) return model!;
 
-            model = await Task.Run(() => Build(roots, scope, version));
+            model = await Task.Run(() => TimedBuild(roots, scope, version));
             _model = model;
             return model;
         }
         finally { _buildGate.Release(); }
+    }
+
+    /// <summary>Starts one rebuild, which runs again if more changed while it was working.</summary>
+    private void RebuildInBackground(IReadOnlyList<string> roots, string scope)
+    {
+        lock (_rebuildGate)
+        {
+            if (_rebuilding) return;
+            _rebuilding = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _buildGate.WaitAsync();
+                try
+                {
+                    while (true)
+                    {
+                        var version = CurrentVersion;
+                        _model = TimedBuild(roots, scope, version);
+                        if (CurrentVersion == version) break;
+                    }
+                }
+                finally { _buildGate.Release(); }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning("Rebuilding the face model failed: {Msg}", ex.Message);
+            }
+            finally
+            {
+                lock (_rebuildGate) _rebuilding = false;
+            }
+        });
+    }
+
+    private Model TimedBuild(IReadOnlyList<string> roots, string scope, (long Store, long Tags) version)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var model = Build(roots, scope, version);
+        _logger?.LogInformation("Face model built in {Ms} ms: {Faces} faces, {People} people, {Suggestions} suggestions",
+            watch.ElapsedMilliseconds, model.FacesTotal, model.Exemplars.Count, model.Suggestions.Count);
+        return model;
     }
 
     private bool IsUsable(Model? model, string root, (long Store, long Tags) version)
@@ -214,6 +309,14 @@ public class FaceRecognitionService
             facesTotal += usable.Length;
         }
 
+        // What each folder's people tags looked like when this model was built.
+        foreach (var folder in _fs.Across(roots).GroupBy(f => Path.GetDirectoryName(f.FilePath) ?? "", StringComparer.OrdinalIgnoreCase))
+        {
+            var tags = new TagsFile();
+            foreach (var file in folder) tags.Files[file.FileName] = file.Tags;
+            _peopleSeen[Path.TrimEndingDirectorySeparator(folder.Key)] = PeopleHash(tags);
+        }
+
         var assigned = new Dictionary<long, string>();
         var embeddings = entries.SelectMany(e => e.Faces).ToDictionary(f => f.Id, f => f.Embedding);
         var dates = entries.SelectMany(e => e.Faces.Select(f => (f.Id, Date: e.File.Tags.DateTaken ?? e.File.Modified)))
@@ -246,7 +349,7 @@ public class FaceRecognitionService
             added += AssignWithinTags(entries, assigned, BuildExemplars(assigned, embeddings, dates));
             if (added == 0) break;
         }
-        DropConflicts(assigned, confirmed, embeddings);
+        DropConflicts(assigned, confirmed, embeddings, dates);
 
         var model = new Model
         {
@@ -305,23 +408,30 @@ public class FaceRecognitionService
 
     /// <summary>
     /// Assumed matches whose face looks like none of that person's other faces were
-    /// most likely someone else in shot. Confirmed ones are trusted as they are.
+    /// most likely someone else in shot. Confirmed ones are trusted as they are. Each face
+    /// is compared with an even sample of the person's faces, not all of them: a person with
+    /// thousands of photos would otherwise cost thousands of comparisons per face.
     /// </summary>
     private static void DropOutliers(Dictionary<long, string> assigned, HashSet<long> confirmed,
         Dictionary<long, float[]> embeddings)
     {
+        var wrong = new ConcurrentBag<long>();
         foreach (var group in assigned.GroupBy(a => a.Value).ToList())
         {
             var ids = group.Select(a => a.Key).ToList();
             if (ids.Count < 4) continue;
 
-            foreach (var id in ids)
+            var step = Math.Max(1, (ids.Count + MaxExemplars - 1) / MaxExemplars);
+            var sample = ids.Where((_, i) => i % step == 0).Select(o => embeddings[o]).ToArray();
+
+            Parallel.ForEach(ids, id =>
             {
-                if (confirmed.Contains(id)) continue;
-                var others = ids.Where(o => o != id).Select(o => embeddings[o]);
-                if (TopKMean(embeddings[id], others) < OutlierThreshold) assigned.Remove(id);
-            }
+                if (confirmed.Contains(id)) return;
+                var own = embeddings[id];
+                if (TopKMean(own, sample.Where(o => !ReferenceEquals(o, own))) < OutlierThreshold) wrong.Add(id);
+            });
         }
+        foreach (var id in wrong) assigned.Remove(id);
     }
 
     /// <summary>
@@ -392,26 +502,31 @@ public class FaceRecognitionService
 
     /// <summary>
     /// A face placed as one person that clearly looks more like another known person was
-    /// placed wrongly — usually a group shot where the tags did not say who was visible.
+    /// placed wrongly - usually a group shot where the tags did not say who was visible.
+    /// Compared against each person's exemplars (an even sample over time), so the cost is
+    /// faces x people x a few dozen rather than faces x faces.
     /// </summary>
     private static int DropConflicts(Dictionary<long, string> assigned, HashSet<long> confirmed,
-        Dictionary<long, float[]> embeddings)
+        Dictionary<long, float[]> embeddings, Dictionary<long, DateTime> dates)
     {
-        var byPerson = assigned.GroupBy(a => a.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Select(a => a.Key).ToList(), StringComparer.OrdinalIgnoreCase);
-        var wrong = new List<long>();
+        var exemplars = BuildExemplars(assigned, embeddings, dates);
+        var wrong = new ConcurrentBag<long>();
 
-        foreach (var (id, person) in assigned)
+        Parallel.ForEach(assigned.ToList(), pair =>
         {
-            if (confirmed.Contains(id)) continue;
-            var own = TopKMean(embeddings[id], byPerson[person].Where(o => o != id).Select(o => embeddings[o]));
-            foreach (var (other, ids) in byPerson)
+            var (id, person) = pair;
+            if (confirmed.Contains(id)) return;
+            var embedding = embeddings[id];
+            var own = exemplars.TryGetValue(person, out var mine)
+                ? TopKMean(embedding, mine.Where(o => !ReferenceEquals(o, embedding)))
+                : float.MinValue;
+            foreach (var (other, faces) in exemplars)
             {
                 if (other.Equals(person, StringComparison.OrdinalIgnoreCase)) continue;
-                var score = TopKMean(embeddings[id], ids.Select(o => embeddings[o]));
+                var score = TopKMean(embedding, faces);
                 if (score >= SuggestThreshold && score > own + ConflictMargin) { wrong.Add(id); break; }
             }
-        }
+        });
 
         foreach (var id in wrong) assigned.Remove(id);
         return wrong.Count;

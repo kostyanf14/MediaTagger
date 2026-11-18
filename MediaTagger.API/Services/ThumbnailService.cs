@@ -26,13 +26,24 @@ public class ThumbnailService
     /// the original, which for a video or a HEIC is the expensive part all over again.
     /// </summary>
     private const int BaseSize = 480;
-    /// <summary>The cache is trimmed back under this on startup, oldest entries first.</summary>
     /// <summary>Rendition small faces are cropped from; matches what face analysis looks at.</summary>
     private const int FaceSourceSize = 1280;
-    private const long CacheLimitBytes = 2L * 1024 * 1024 * 1024;
+    private const int DefaultCacheGb = 10;
+    private const long BytesPerGb = 1024L * 1024 * 1024;
+    /// <summary>
+    /// Renditions bigger than this (the viewer's, a converted HEIC) are cheap to lose and
+    /// expensive to keep, so they are counted as this much older when the cache is trimmed.
+    /// </summary>
+    private const long LargeEntryBytes = 250 * 1024;
+    private static readonly TimeSpan LargeEntryPenalty = TimeSpan.FromDays(30);
+    /// <summary>A hit refreshes an entry's age at most this often, so reading is not writing.</summary>
+    private static readonly TimeSpan TouchEvery = TimeSpan.FromDays(1);
 
     private readonly string _cacheDir;
     private readonly ILogger<ThumbnailService> _logger;
+    private readonly SettingsService _settings;
+    private readonly Timer _trimTimer;
+    private readonly object _trimGate = new();
     private readonly bool _ffmpegAvailable;
 
     // One conversion at a time per cache entry. A gallery mounting fires a burst of
@@ -45,13 +56,21 @@ public class ThumbnailService
     // what makes thumbnails fail intermittently under load.
     private readonly SemaphoreSlim _workSlots = new(Math.Max(2, Environment.ProcessorCount / 2));
 
-    public ThumbnailService(ILogger<ThumbnailService> logger, CacheLocator locator, IConfiguration config)
+    public ThumbnailService(ILogger<ThumbnailService> logger, CacheLocator locator, IConfiguration config,
+        SettingsService settings)
     {
         _logger = logger;
+        _settings = settings;
         _cacheDir = locator.GetDirectory(CacheFolderName);
         _logger.LogInformation("Thumbnail cache: {Path}", _cacheDir);
         CleanupStaleTempFiles();
-        _ = Task.Run(TrimCache);
+        // Trimmed a little after start and then every hour, and at once when the limit changes:
+        // a cache that is only looked at on startup grows for as long as the app stays open.
+        _trimTimer = new Timer(_ => TrimCache(), null, TimeSpan.FromSeconds(30), TimeSpan.FromHours(1));
+        _settings.Changed += (before, after) =>
+        {
+            if (before.ThumbnailCacheGb != after.ThumbnailCacheGb) _ = Task.Run(TrimCache);
+        };
 
         // The slots above already spread work across cores; letting each conversion
         // fan out as well only makes them fight.
@@ -104,7 +123,9 @@ public class ThumbnailService
         if (!isVideo) at = null;
 
         var cachePath = GetCachePath(filePath, maxSize, at);
-        if (IsCacheValid(cachePath, filePath)) return cachePath;
+        if (IsCacheValid(cachePath, filePath)) { Touch(cachePath); return cachePath; }
+        // Made under the old, path-based name before a rename or move: it is still the right picture.
+        if (AdoptLegacyEntry(filePath, maxSize, at, cachePath)) return cachePath;
 
         // Small previews are cut from the grid-sized one, which the gallery has
         // usually made already and which is a few kilobytes to decode.
@@ -250,7 +271,25 @@ public class ThumbnailService
         }
     }
 
+    /// <summary>
+    /// Named from what the picture is — the file's name, size and time — rather than where
+    /// it lives, so a rename or a move does not throw away every preview under it.
+    /// </summary>
     private string GetCachePath(string filePath, int maxSize, double? at = null)
+    {
+        FileInfo info;
+        try { info = new FileInfo(filePath); }
+        catch { return GetLegacyCachePath(filePath, maxSize, at); }
+        if (!info.Exists) return GetLegacyCachePath(filePath, maxSize, at);
+
+        var identity = $"{info.Name.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{maxSize}{FrameKey(at)}";
+        var cacheKey = Convert.ToHexString(
+            System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(identity)));
+        return Path.Combine(_cacheDir, "f" + cacheKey + ".jpg");
+    }
+
+    /// <summary>The name previews had when they were named from the path.</summary>
+    internal string GetLegacyCachePath(string filePath, int maxSize, double? at = null)
     {
         var normalized = filePath;
         try { normalized = Path.GetFullPath(filePath); } catch { /* keep the raw path */ }
@@ -260,6 +299,58 @@ public class ThumbnailService
             System.Security.Cryptography.MD5.HashData(
                 System.Text.Encoding.UTF8.GetBytes(normalized + "|" + maxSize + FrameKey(at))));
         return Path.Combine(_cacheDir, cacheKey + ".jpg");
+    }
+
+    private bool AdoptLegacyEntry(string filePath, int maxSize, double? at, string cachePath)
+    {
+        var legacy = GetLegacyCachePath(filePath, maxSize, at);
+        if (legacy == cachePath || !IsCacheValid(legacy, filePath)) return false;
+        try
+        {
+            File.Move(legacy, cachePath, overwrite: true);
+            return true;
+        }
+        catch (IOException) { return IsCacheValid(cachePath, filePath); }
+    }
+
+    /// <summary>Marks an entry as used just now, so trimming drops what has not been looked at for longest.</summary>
+    private static void Touch(string cachePath)
+    {
+        try
+        {
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) > TouchEvery)
+                File.SetLastWriteTimeUtc(cachePath, DateTime.UtcNow);
+        }
+        catch { /* a busy file keeps its age */ }
+    }
+
+    private long LimitBytes()
+    {
+        var gb = _settings.Get().ThumbnailCacheGb;
+        return Math.Clamp(gb <= 0 ? DefaultCacheGb : gb, 1, 1000) * BytesPerGb;
+    }
+
+    private IEnumerable<FileInfo> Entries() =>
+        new DirectoryInfo(_cacheDir).EnumerateFiles("*.jpg").Where(e => !e.Name.Contains(".part", StringComparison.Ordinal));
+
+    /// <summary>How much the preview cache holds and the most it may.</summary>
+    public (long Bytes, int Files, long LimitBytes) CacheInfo()
+    {
+        long bytes = 0;
+        var files = 0;
+        foreach (var entry in Entries()) { bytes += entry.Length; files++; }
+        return (bytes, files, LimitBytes());
+    }
+
+    /// <summary>Removes every preview. They are rebuilt as they are asked for.</summary>
+    public int ClearCache()
+    {
+        var removed = 0;
+        foreach (var entry in Entries().ToList())
+        {
+            try { entry.Delete(); removed++; } catch { /* in use right now */ }
+        }
+        return removed;
     }
 
     /// <summary>Millisecond precision; the cover frame keeps the key it always had.</summary>
@@ -483,32 +574,39 @@ public class ThumbnailService
     }
 
     /// <summary>
-    /// Keeps the cache from growing without bound. Entries are cheap to make again,
-    /// so the ones untouched for longest simply go once the folder is over its limit.
+    /// Keeps the cache from growing without bound. Entries are cheap to make again, so
+    /// once the folder is over its limit the ones not shown for longest go first — and the
+    /// big renditions before small ones of the same age, since they cost the most to keep.
     /// </summary>
     private void TrimCache()
     {
-        try
+        lock (_trimGate)
         {
-            var entries = new DirectoryInfo(_cacheDir).EnumerateFiles("*.jpg").ToList();
-            var total = entries.Sum(e => e.Length);
-            if (total <= CacheLimitBytes) return;
-
-            // Trim well below the limit so this does not run again on every start.
-            var target = CacheLimitBytes * 8 / 10;
-            var removed = 0;
-            foreach (var entry in entries.OrderBy(e => e.LastWriteTimeUtc))
+            try
             {
-                if (total <= target) break;
-                total -= entry.Length;
-                TryDelete(entry.FullName);
-                removed++;
+                var limit = LimitBytes();
+                var entries = Entries().ToList();
+                var total = entries.Sum(e => e.Length);
+                if (total <= limit) return;
+
+                // Trim well below the limit so this does not run again straight away.
+                var target = limit * 8 / 10;
+                var removed = 0;
+                foreach (var entry in entries.OrderBy(e =>
+                             e.LastWriteTimeUtc - (e.Length > LargeEntryBytes ? LargeEntryPenalty : TimeSpan.Zero)))
+                {
+                    if (total <= target) break;
+                    total -= entry.Length;
+                    TryDelete(entry.FullName);
+                    removed++;
+                }
+                _logger.LogInformation("Thumbnail cache trimmed to {Mb} MB: {Count} entries removed",
+                    total / (1024 * 1024), removed);
             }
-            _logger.LogInformation("Thumbnail cache trimmed: {Count} oldest entries removed", removed);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug("Thumbnail cache trim skipped: {Msg}", ex.Message);
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Thumbnail cache trim skipped: {Msg}", ex.Message);
+            }
         }
     }
 

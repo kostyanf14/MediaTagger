@@ -22,6 +22,8 @@ public class AppSettings
     public bool DoubleClickFullscreen { get; set; } = true;
     /// <summary>Ctrl+C in the viewer puts the open photo on the clipboard.</summary>
     public bool CopyPhotoOnCtrlC { get; set; } = true;
+    /// <summary>How much disk the preview cache may use, in GB. The least recently shown previews go first.</summary>
+    public int ThumbnailCacheGb { get; set; } = 10;
 }
 
 /// <summary>How much of a video face analysis looks at; each step costs more time per video.</summary>
@@ -87,6 +89,18 @@ public class TagsFile
 {
     public int Version { get; set; } = 1;
     public Dictionary<string, FileTags> Files { get; set; } = new();
+    /// <summary>
+    /// Tags of files that were deleted, kept for a while so restoring one from the
+    /// recycle bin brings its tags back. Absent when there is nothing to keep.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, RemovedTags>? Removed { get; set; }
+}
+
+public class RemovedTags
+{
+    public FileTags Tags { get; set; } = new();
+    public DateTime At { get; set; }
 }
 
 public class FolderNode
@@ -195,6 +209,8 @@ public class FaceSuggestionsResponse
     public List<PersonSuggestions> People { get; set; } = new();
     public List<LearnedPerson> Learned { get; set; } = new();
     public int FacesTotal { get; set; }
+    /// <summary>True while a newer model is being built; what is shown is a little behind.</summary>
+    public bool Building { get; set; }
 }
 
 public class FileFace

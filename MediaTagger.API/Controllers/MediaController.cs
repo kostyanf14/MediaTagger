@@ -84,6 +84,7 @@ public class MediaController : ControllerBase
 
     /// <summary>Lets the client skip a remembered folder whose drive is not plugged in.</summary>
     [HttpGet("folder-exists")]
+    [OutsideLibraryScope]
     public ActionResult<bool> FolderExists([FromQuery] string folderPath)
         => Ok(!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath));
 
@@ -107,6 +108,7 @@ public class MediaController : ControllerBase
         if (outcome.Code == "merge") return Conflict(new { code = "merge", destination = outcome.Destination });
         if (outcome.Code == "exists") return Conflict(new { code = "exists", name = outcome.Name });
         if (outcome.Code == "missing") return NotFound();
+        if (outcome.Code == "cross_volume") return Conflict(new { code = "cross_volume" });
         if (outcome.Code != null) return BadRequest("Invalid move");
         return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
     }
@@ -133,9 +135,11 @@ public class MediaController : ControllerBase
         if (!System.IO.File.Exists(filePath)) return NotFound();
         try
         {
-            _tags.RemoveFileTags(filePath);
-
+            // The file goes first: if the bin refuses it, nothing about it has changed.
             SendToTrash(filePath);
+            // Its tags are kept aside for a while, so a restore from the bin brings them back.
+            try { _tags.RemoveFileTags(filePath); }
+            catch (TagsFileUnreadableException) { /* the stale entry is harmless; the file is gone */ }
             _fs.InvalidateFolder(Path.GetDirectoryName(filePath) ?? "");
             return Ok();
         }
@@ -222,13 +226,15 @@ public class MediaController : ControllerBase
     {
         if (!System.IO.File.Exists(filePath)) return NotFound();
 
-        if (maxSize > 0) maxSize = Math.Clamp(maxSize, 64, 2048);
+        if (maxSize > 0) maxSize = Math.Clamp(maxSize, 64, 4096);
 
+        // A version in the address (the file's modified time) says the picture behind it cannot change.
+        var versioned = Request.Query.ContainsKey("v");
         string? cached;
         try { cached = await _thumbnails.GetThumbnailPath(filePath, maxSize, cancel, t); }
         // The tile this was for is gone; nobody is waiting on an answer.
         catch (OperationCanceledException) { return new EmptyResult(); }
-        if (cached != null) return CacheableFile(cached, "image/jpeg");
+        if (cached != null) return CacheableFile(cached, "image/jpeg", versioned);
 
         // Nothing cached: fine for JPEG/PNG (the browser decodes the original),
         // but HEIC and video are unreadable without the conversion that just failed.
@@ -244,18 +250,19 @@ public class MediaController : ControllerBase
             ".bmp"  => "image/bmp",
             _       => "image/jpeg"
         };
-        return CacheableFile(filePath, contentType);
+        return CacheableFile(filePath, contentType, versioned);
     }
 
     /// <summary>Serves a file with validators so revisits come back as 304 instead of a re-download.</summary>
-    private IActionResult CacheableFile(string path, string contentType)
+    private IActionResult CacheableFile(string path, string contentType, bool immutable = false)
     {
         FileInfo info;
         try { info = new FileInfo(path); if (!info.Exists) return NotFound(); }
         catch { return NotFound(); }
 
         var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
-        Response.Headers.CacheControl = "private, max-age=86400";
+        // Without a version a revisit asks again (a 304 if nothing changed); with one it does not ask at all.
+        Response.Headers.CacheControl = immutable ? "private, max-age=31536000, immutable" : "private, max-age=86400";
         return PhysicalFile(path, contentType, lastModified: info.LastWriteTimeUtc, entityTag: etag);
     }
 

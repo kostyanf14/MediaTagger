@@ -4,7 +4,7 @@ import {
   RadioGroup, FormControlLabel, Radio, Box, Slider, Switch, Divider, CircularProgress,
   Autocomplete, TextField
 } from '@mui/material'
-import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi } from '../api/client'
+import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi, settingsApi } from '../api/client'
 import { ServerConnect } from './ServerConnect'
 
 const VIDEO_MODES: { value: VideoFaceMode; label: string; hint: string }[] = [
@@ -30,6 +30,34 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
   const [checkingDevice, setCheckingDevice] = useState(false)
   // The slider moves freely; only where it is let go is saved, since each save restarts the scan.
   const [threadsDraft, setThreadsDraft] = useState(settings.faceThreads ?? 0)
+  const [backup, setBackup] = useState<{ state: 'idle' | 'working' | 'done' | 'failed'; note?: string }>({ state: 'idle' })
+
+  const [cache, setCache] = useState<{ bytes: number; files: number; limitBytes: number } | null>(null)
+  const [cacheGb, setCacheGb] = useState(String(settings.thumbnailCacheGb ?? 10))
+
+  const loadCache = () => {
+    settingsApi.thumbnailCache().then(res => setCache(res.data)).catch(() => setCache(null))
+  }
+
+  const saveCacheLimit = () => {
+    const gb = Math.round(Number(cacheGb))
+    if (!Number.isFinite(gb) || gb < 1 || gb > 1000) { setCacheGb(String(settings.thumbnailCacheGb ?? 10)); return }
+    if (gb !== (settings.thumbnailCacheGb ?? 10)) void save({ thumbnailCacheGb: gb }).then(loadCache)
+  }
+
+  const clearCache = () => {
+    settingsApi.clearThumbnailCache().then(loadCache).catch(() => {})
+  }
+
+  const makeBackup = () => {
+    setBackup({ state: 'working' })
+    settingsApi.backup()
+      .then(res => setBackup({
+        state: 'done',
+        note: `Збережено: ${res.data.path} (файлів тегів: ${res.data.tagFiles}${res.data.faces ? ', обличчя' : ''})`
+      }))
+      .catch(() => setBackup({ state: 'failed' }))
+  }
 
   const loadDevice = () => {
     setCheckingDevice(true)
@@ -42,7 +70,9 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
   useEffect(() => {
     if (!open) return
     setThreadsDraft(settings.faceThreads ?? 0)
+    setCacheGb(String(settings.thumbnailCacheGb ?? 10))
     loadDevice()
+    loadCache()
   }, [open])
 
   const save = async (patch: Partial<AppSettings>, recheckDevice = false) => {
@@ -203,6 +233,46 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
                 </Typography>
           ) : null}
         </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        <Typography variant="subtitle2">Кеш мініатюр</Typography>
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          {cache
+            ? `Зараз ${(cache.bytes / 1024 ** 3).toFixed(2)} ГБ, файлів: ${cache.files.toLocaleString('uk-UA')}. `
+            : ''}
+          Коли місце закінчується, першими зникають мініатюри, які давно не показували; вони створюються наново.
+        </Typography>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <TextField size="small" type="number" label="Ліміт, ГБ" value={cacheGb}
+            onChange={e => setCacheGb(e.target.value)} onBlur={saveCacheLimit}
+            inputProps={{ min: 1, max: 1000 }} sx={{ width: 110 }} />
+          <Button size="small" variant="outlined" onClick={clearCache}>Очистити</Button>
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        <Typography variant="subtitle2">Копія тегів</Typography>
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          Раз на добу всі файли тегів і база облич пакуються в архів у каталозі кешу API, останніх 14 копій
+          лишається. Цією кнопкою копію можна зробити зараз.
+        </Typography>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Button size="small" variant="outlined" disabled={backup.state === 'working'} onClick={makeBackup}>
+            Зробити копію зараз
+          </Button>
+          {backup.state === 'working' && <CircularProgress size={14} />}
+        </Box>
+        {backup.state === 'done' && (
+          <Typography variant="caption" color="success.main" display="block" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
+            {backup.note}
+          </Typography>
+        )}
+        {backup.state === 'failed' && (
+          <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
+            Не вдалося зробити копію. Деталі — у журналі API.
+          </Typography>
+        )}
 
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 2 }}>
           Після зміни пошук облич перезапускається: доробляє відео, оброблені простіше, ніж обрано,

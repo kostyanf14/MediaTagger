@@ -30,6 +30,25 @@ public static class NetworkAccess
         return new NetworkGate(listen, key, cert);
     }
 
+    /// <summary>Host names that mean this machine, in the form the AllowedHosts setting takes.</summary>
+    public const string LoopbackHosts = "localhost;127.0.0.1;[::1]";
+
+    /// <summary>
+    /// Origins allowed to call the API from a browser context: the dev server, and the
+    /// packaged window's own scheme. A configured list (comma or semicolon separated) replaces them.
+    /// </summary>
+    public static string[] ClientOrigins(string? configured)
+    {
+        var listed = (configured ?? "")
+            .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(o => o.TrimEnd('/'))
+            .Where(o => o.Length > 0)
+            .ToArray();
+        return listed.Length > 0
+            ? listed
+            : new[] { "http://localhost:3000", "http://127.0.0.1:3000", "app://mediatagger" };
+    }
+
     public static bool IsLoopbackHost(string host)
     {
         host = host.Trim().Trim('[', ']');

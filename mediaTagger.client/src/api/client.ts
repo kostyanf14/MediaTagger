@@ -183,6 +183,8 @@ export interface AppSettings {
   doubleClickFullscreen?: boolean
   /** Ctrl+C in the viewer copies the open photo. Absent means on. */
   copyPhotoOnCtrlC?: boolean
+  /** Disk the preview cache may use, in GB; absent means the server's default. */
+  thumbnailCacheGb?: number
 }
 /** What the face scan runs on. */
 export interface FaceDeviceInfo {
@@ -234,6 +236,8 @@ export interface PersonSuggestions { person: string; total: number; items: FaceS
 export interface LearnedPerson { name: string; faces: number; cover?: FaceSuggestion }
 export interface FaceSuggestionsResponse {
   people: PersonSuggestions[]; learned: LearnedPerson[]; facesTotal: number
+  /** A newer face model is being built; what is shown is a little behind. */
+  building?: boolean
 }
 export interface FileFace extends FaceBox {
   faceId: number
@@ -279,6 +283,16 @@ function rootQuery(root: string | string[], extra?: Record<string, string | numb
     }
   }
   return params
+}
+
+// The viewer shows a photo this big until it is zoomed, and only then fetches the original.
+export const VIEWER_SIZE = 2560
+// A file smaller than this is shown as it is: a rendition would save little.
+const ORIGINAL_BYTES_LIMIT = 1_500_000
+
+/** HEIC cannot be shown by the browser, and a big JPEG is slow to fetch over a network; both get a screen-sized rendition. */
+export function needsViewerRendition(file: { fileName: string; size: number }): boolean {
+  return /\.hei[cf]$/i.test(file.fileName) || file.size > ORIGINAL_BYTES_LIMIT
 }
 
 export const THUMB_SIZE = 480
@@ -327,10 +341,13 @@ export const mediaApi = {
   // maxSize bounds the longest edge; pass it everywhere except the lightbox, which
   // needs the original. The server caches each size separately.
   // For a video, time (seconds) picks the frame instead of the cover.
-  getThumbnailUrl: (filePath: string, maxSize?: number, time?: number | null) =>
+  // version (the file's modified time) tells the browser the picture behind this address
+  // cannot change, so it need not ask again.
+  getThumbnailUrl: (filePath: string, maxSize?: number, time?: number | null, version?: string) =>
     withAccessKey(
       `${API_ORIGIN}/api/media/thumbnail?filePath=${encodeURIComponent(filePath)}` +
-      (maxSize ? `&maxSize=${maxSize}` : '') + frameParam(time)),
+      (maxSize ? `&maxSize=${maxSize}` : '') + frameParam(time) +
+      (version ? `&v=${encodeURIComponent(version)}` : '')),
 
   // Stream — for video playback, supports HTTP Range (seeking)
   getStreamUrl: (filePath: string) =>
@@ -383,5 +400,9 @@ export const placesApi = {
 
 export const settingsApi = {
   get: () => api.get<AppSettings>('/settings'),
-  save: (settings: AppSettings) => api.put('/settings', settings)
+  save: (settings: AppSettings) => api.put('/settings', settings),
+  // Zips every tags file and the face database into the API's cache folder.
+  backup: () => api.post<{ path: string; tagFiles: number; faces: boolean }>('/settings/backup'),
+  thumbnailCache: () => api.get<{ bytes: number; files: number; limitBytes: number }>('/settings/thumbnail-cache'),
+  clearThumbnailCache: () => api.delete<number>('/settings/thumbnail-cache')
 }

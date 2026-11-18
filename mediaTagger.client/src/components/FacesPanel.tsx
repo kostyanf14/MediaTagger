@@ -197,6 +197,14 @@ export function FacesPanel({
     return () => { cancelled = true; clearInterval(timer) }
   }, [active, load])
 
+  // The server answers at once from the model it has, and says when a newer one is on its way.
+  const building = !!data?.building
+  useEffect(() => {
+    if (!active || !building) return
+    const timer = setTimeout(() => load(true), 3000)
+    return () => clearTimeout(timer)
+  }, [active, building, load, data])
+
   const markDecided = (items: FaceSuggestion[]) =>
     setDecided(prev => { const next = new Set(prev); items.forEach(i => next.add(i.faceId)); return next })
 

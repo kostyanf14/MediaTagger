@@ -23,15 +23,35 @@ public class FileSystemService
         return _index.Query(folderPath, recursive);
     }
 
-    /// <summary>Files under every root, once. A root inside another root is skipped.</summary>
+    // The last whole-library listing. Search, the tag lists, the map, the library counts
+    // and both models all start from it; copying every file's record for each of them is
+    // most of what a request costs. It is good until the index reports a change.
+    private sealed record Listing(string Scope, long Generation, List<MediaFile> Files);
+    private volatile Listing? _listing;
+
+    /// <summary>
+    /// Files under every root, once. A root inside another root is skipped. The list may be
+    /// shared with other callers: read it, do not change it.
+    /// </summary>
     public List<MediaFile> Across(IEnumerable<string> roots)
     {
+        var collapsed = Collapse(roots);
+        var scope = Scope(collapsed);
+        var generation = _index.Generation;
+        if (_listing is { } kept && kept.Generation == generation && kept.Scope == scope)
+            return kept.Files;
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var files = new List<MediaFile>();
-        foreach (var root in Collapse(roots))
+        foreach (var root in collapsed)
             foreach (var file in GetMediaFiles(root, recursive: true))
                 if (seen.Add(file.FilePath))
                     files.Add(file);
+
+        // A change during the read, or a folder that cannot be watched, means this is only
+        // good for the caller that asked.
+        if (generation == _index.Generation && collapsed.All(_index.IsWatched))
+            _listing = new Listing(scope, generation, files);
         return files;
     }
 
@@ -152,7 +172,7 @@ public class FileSystemService
         try
         {
             foreach (var dir in Directory.EnumerateDirectories(rootPath)
-                         .Where(d => !Path.GetFileName(d).StartsWith('.')))
+                         .Where(d => !LibraryIndex.IsSkippedFolder(Path.GetFileName(d))))
             {
                 node.Children.Add(GetFolderTree(dir, depth - 1));
             }
@@ -171,29 +191,31 @@ public class FileSystemService
         {
             var t = f.Tags;
 
+            const StringComparison Ci = StringComparison.OrdinalIgnoreCase;
             if (!string.IsNullOrWhiteSpace(request.Query))
             {
-                var q = request.Query.ToLower();
-                var match = t.People.Any(p => p.ToLower().Contains(q))
-                    || (t.Photographer?.ToLower().Contains(q) ?? false)
-                    || t.Place.ToLower().Contains(q)
-                    || t.Groups.Any(g => g.ToLower().Contains(q))
-                    || t.Albums.Any(a => a.ToLower().Contains(q))
-                    || f.FileName.ToLower().Contains(q);
+                var q = request.Query;
+                var match = t.People.Any(p => p.Contains(q, Ci))
+                    || (t.Photographer?.Contains(q, Ci) ?? false)
+                    || t.Place.Contains(q, Ci)
+                    || t.Groups.Any(g => g.Contains(q, Ci))
+                    || t.Albums.Any(a => a.Contains(q, Ci))
+                    || f.FileName.Contains(q, Ci);
                 if (!match) return false;
             }
 
+            // A name is the same name in any case, the way tags are merged everywhere else.
             if (request.People?.Any() == true)
-                if (!request.People.All(p => t.People.Contains(p))) return false;
+                if (!request.People.All(p => t.People.Contains(p, StringComparer.OrdinalIgnoreCase))) return false;
 
             if (!string.IsNullOrWhiteSpace(request.Place))
-                if (!t.Place.Contains(request.Place, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!t.Place.Contains(request.Place, Ci)) return false;
 
             if (request.Albums?.Any() == true)
-                if (!request.Albums.Any(a => t.Albums.Contains(a))) return false;
+                if (!request.Albums.Any(a => t.Albums.Contains(a, StringComparer.OrdinalIgnoreCase))) return false;
 
             if (request.Groups?.Any() == true)
-                if (!request.Groups.Any(g => t.Groups.Contains(g))) return false;
+                if (!request.Groups.Any(g => t.Groups.Contains(g, StringComparer.OrdinalIgnoreCase))) return false;
 
             return true;
         }).ToList();

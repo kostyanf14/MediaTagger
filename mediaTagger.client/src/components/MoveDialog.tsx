@@ -6,6 +6,7 @@ import axios from 'axios'
 import { apiIsLocal, mediaApi, RenameResponse, SortByDateResponse } from '../api/client'
 import { remoteHides } from '../remoteUi'
 import { useElectron } from '../hooks/useElectron'
+import { describeApiError } from '../utils/apiErrors'
 
 export interface MoveTarget {
   path: string
@@ -58,7 +59,7 @@ export function MoveDialog({ target, onCancel, onMoved }: Props) {
       }
       setError(axios.isAxiosError(e) && e.response?.status === 404
         ? 'Папку призначення не знайдено'
-        : 'Не вдалося перемістити')
+        : describeApiError(e, 'Не вдалося перемістити'))
     } finally {
       setBusy(false)
     }
@@ -126,8 +127,8 @@ export function SortFolderDialog({ folder, onCancel, onSorted }: {
     try {
       const res = await mediaApi.sortByDate(folder.path)
       setResult(res.data)
-    } catch {
-      setError('Не вдалося розкласти фото')
+    } catch (e) {
+      setError(describeApiError(e, 'Не вдалося розкласти фото'))
     } finally {
       setBusy(false)
     }

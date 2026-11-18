@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using MediaTagger.API.Models;
 
 namespace MediaTagger.API.Services;
@@ -26,18 +27,46 @@ public class PlaceSuggestionService
     /// <summary>External edits to tag files do not bump the tags version, so a model is never trusted for longer.</summary>
     private static readonly TimeSpan MaxModelAge = TimeSpan.FromMinutes(1);
 
+    /// <summary>Side of a grid cell in degrees: about 1.1 km of latitude, as far as any place reaches.</summary>
+    private const double CellDegrees = 0.01;
+    private const double MetersPerDegree = 111_320;
+
     private readonly FileSystemService _fs;
     private readonly object _gate = new();
     private Model? _model;
     private long _tagsVersion;
 
+    // What the last write to each folder said about places and coordinates. A write that
+    // changes neither - a person, an album, a note - leaves the places as they were.
+    private readonly ConcurrentDictionary<string, int> _placesWritten = new(StringComparer.OrdinalIgnoreCase);
+
     public PlaceSuggestionService(FileSystemService fs, TagsService tags)
     {
         _fs = fs;
-        tags.FolderChanged += _ => Interlocked.Increment(ref _tagsVersion);
+        tags.FolderWritten += OnFolderWritten;
+    }
+
+    private void OnFolderWritten(string folder, TagsFile written)
+    {
+        var hash = new HashCode();
+        foreach (var (name, tags) in written.Files.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            hash.Add(name, StringComparer.OrdinalIgnoreCase);
+            hash.Add(tags.Place?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
+            hash.Add(tags.Coordinates?.Lat);
+            hash.Add(tags.Coordinates?.Lng);
+        }
+        var key = Path.TrimEndingDirectorySeparator(folder);
+        var value = hash.ToHashCode();
+        if (_placesWritten.TryGetValue(key, out var before) && before == value) return;
+        _placesWritten[key] = value;
+        Interlocked.Increment(ref _tagsVersion);
     }
 
     private sealed record Point(double Lat, double Lng);
+
+    /// <summary>One photo of a place, filed under the grid cell it falls in.</summary>
+    private readonly record struct Spot(int Place, Point At);
 
     private sealed class Place
     {
@@ -49,12 +78,32 @@ public class PlaceSuggestionService
         public double Reach { get; set; }
     }
 
-    private sealed record Model(string Root, long Version, DateTime BuiltAt, List<Place> Places, List<MediaFile> Unplaced);
+    private sealed class Model
+    {
+        public required string Root { get; init; }
+        public required long Version { get; init; }
+        public required DateTime BuiltAt { get; init; }
+        public required List<Place> Places { get; init; }
+        public required List<MediaFile> Unplaced { get; init; }
+        public required Dictionary<long, List<Spot>> Grid { get; init; }
+        // Worked out on first use and kept: the answer is the same until the model is.
+        public PlaceSuggestionsResponse? Suggestions { get; set; }
+    }
+
+    private static long CellKey(int row, int column) => ((long)row << 32) ^ (uint)column;
+
+    private static (int Row, int Column) CellOf(double lat, double lng) =>
+        ((int)Math.Floor(lat / CellDegrees), (int)Math.Floor(lng / CellDegrees));
 
     /// <summary>Every geotagged photo without a place that has a likely one, grouped by that place.</summary>
     public PlaceSuggestionsResponse GetSuggestions(IReadOnlyList<string> roots)
     {
         var model = GetModel(roots);
+        lock (_gate) return model.Suggestions ??= BuildSuggestions(model);
+    }
+
+    private static PlaceSuggestionsResponse BuildSuggestions(Model model)
+    {
         var suggestions = new List<PlaceSuggestion>();
 
         foreach (var file in model.Unplaced)
@@ -100,27 +149,42 @@ public class PlaceSuggestionService
 
     private static List<PlaceCandidate> Rank(Model model, Point at)
     {
+        // No place reaches further than MaxReachMeters, so only the cells that radius touches matter.
+        var dLat = MaxReachMeters / MetersPerDegree;
+        var dLng = dLat / Math.Max(0.05, Math.Cos(Math.Min(Math.Abs(at.Lat), 85) * Math.PI / 180));
+        var (rowFrom, columnFrom) = CellOf(at.Lat - dLat, at.Lng - dLng);
+        var (rowTo, columnTo) = CellOf(at.Lat + dLat, at.Lng + dLng);
+
+        var found = new Dictionary<int, (double Nearest, double Score, int Support)>();
+        for (var row = rowFrom; row <= rowTo; row++)
+            for (var column = columnFrom; column <= columnTo; column++)
+            {
+                if (!model.Grid.TryGetValue(CellKey(row, column), out var spots)) continue;
+                foreach (var spot in spots)
+                {
+                    var place = model.Places[spot.Place];
+                    var d = Distance(at, spot.At);
+                    if (d > place.Reach) continue;
+                    found.TryGetValue(spot.Place, out var so);
+                    var nearest = so.Support == 0 ? d : Math.Min(so.Nearest, d);
+                    // Every photo of the place close by is a vote, worth less the further away it is.
+                    found[spot.Place] = (nearest, so.Score + Math.Exp(-0.5 * (d / place.Spread) * (d / place.Spread)),
+                        so.Support + 1);
+                }
+            }
+
         var scored = new List<PlaceCandidate>();
         var total = 0.0;
-
-        foreach (var place in model.Places)
+        // In the order the places were built, so equal scores come out the same every time.
+        foreach (var (index, hit) in found.OrderBy(kv => kv.Key))
         {
-            var nearest = double.MaxValue;
-            var score = 0.0;
-            var support = 0;
-            foreach (var point in place.Points)
+            if (hit.Support == 0 || hit.Score < 1e-6) continue;
+            total += hit.Score;
+            scored.Add(new PlaceCandidate
             {
-                var d = Distance(at, point);
-                if (d < nearest) nearest = d;
-                if (d > place.Reach) continue;
-                // Every photo of the place close by is a vote, worth less the further away it is.
-                score += Math.Exp(-0.5 * (d / place.Spread) * (d / place.Spread));
-                support++;
-            }
-            if (support == 0 || score < 1e-6) continue;
-
-            total += score;
-            scored.Add(new PlaceCandidate { Place = place.Name, Confidence = score, Distance = Math.Round(nearest), Support = support });
+                Place = model.Places[index].Name, Confidence = hit.Score,
+                Distance = Math.Round(hit.Nearest), Support = hit.Support
+            });
         }
 
         foreach (var candidate in scored)
@@ -185,15 +249,28 @@ public class PlaceSuggestionService
             return place;
         }).ToList();
 
-        return new Model(scope, version, DateTime.UtcNow, places, unplaced);
+        var grid = new Dictionary<long, List<Spot>>();
+        for (var i = 0; i < places.Count; i++)
+            foreach (var point in places[i].Points)
+            {
+                var (row, column) = CellOf(point.Lat, point.Lng);
+                var key = CellKey(row, column);
+                if (!grid.TryGetValue(key, out var cell)) grid[key] = cell = new List<Spot>();
+                cell.Add(new Spot(i, point));
+            }
+
+        return new Model
+        {
+            Root = scope, Version = version, BuiltAt = DateTime.UtcNow,
+            Places = places, Unplaced = unplaced, Grid = grid
+        };
     }
 
     /// <summary>Metres between two points. Flat-earth is plenty at the scale of "which café".</summary>
     private static double Distance(Point a, Point b)
     {
-        const double metersPerDegree = 111_320;
-        var dLat = (a.Lat - b.Lat) * metersPerDegree;
-        var dLng = (a.Lng - b.Lng) * metersPerDegree * Math.Cos((a.Lat + b.Lat) * Math.PI / 360);
+        var dLat = (a.Lat - b.Lat) * MetersPerDegree;
+        var dLng = (a.Lng - b.Lng) * MetersPerDegree * Math.Cos((a.Lat + b.Lat) * Math.PI / 360);
         return Math.Sqrt(dLat * dLat + dLng * dLng);
     }
 }

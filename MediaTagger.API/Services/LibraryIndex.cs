@@ -67,6 +67,16 @@ public class LibraryIndex : IDisposable
     public static string GetMediaType(string path) =>
         VideoExtensions.Contains(Path.GetExtension(path)) ? "video" : "image";
 
+    /// <summary>
+    /// Folders that hold the system's own copies rather than photos: hidden dot-folders,
+    /// Synology's @eaDir (thumbnails with the photos' names) and #recycle, and Windows'
+    /// recycle bin and volume information. Walking them would list every photo twice.
+    /// </summary>
+    public static bool IsSkippedFolder(string name) =>
+        name.Length > 0 && (name[0] is '.' or '@' or '#'
+            || name.Equals("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Media files in <paramref name="folderPath"/>, optionally with everything below it.</summary>
     public List<MediaFile> Query(string folderPath, bool recursive)
     {
@@ -109,6 +119,16 @@ public class LibraryIndex : IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>Changes whenever any listing may have changed; a result built at one value is good until it moves.</summary>
+    public long Generation => Volatile.Read(ref _generation);
+
+    /// <summary>True when changes under <paramref name="root"/> are being reported, so what was read can be kept.</summary>
+    public bool IsWatched(string root)
+    {
+        var full = Normalize(root);
+        lock (_watchGate) return _watchers.Any(w => IsUnder(full, w.Path));
     }
 
     /// <summary>Forgets one folder's listing; the next request reads it again.</summary>
@@ -159,7 +179,7 @@ public class LibraryIndex : IDisposable
                 if (entry is DirectoryInfo directory)
                 {
                     // Following links is how a scan ends up walking in circles.
-                    if (!directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    if (!directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && !IsSkippedFolder(directory.Name))
                         visit.SubFolders.Add(directory.FullName);
                 }
                 else if (entry is FileInfo file && IsMediaFile(file.Name))
@@ -192,17 +212,38 @@ public class LibraryIndex : IDisposable
 
         if (jobs.Count == 0) return;
 
-        using var scan = _progress.Begin(root, jobs.Count);
-        Parallel.ForEach(jobs, new ParallelOptions { MaxDegreeOfParallelism = ScanThreads }, job =>
+        var restored = new ConcurrentBag<(string Folder, string Name)>();
+        using (var scan = _progress.Begin(root, jobs.Count))
         {
-            job.Built[job.Index] = Describe(job.Visit.Files[job.Index], job.Tags);
-            scan.Advance();
-        });
+            Parallel.ForEach(jobs, new ParallelOptions { MaxDegreeOfParallelism = ScanThreads }, job =>
+            {
+                job.Built[job.Index] = Describe(job.Visit.Files[job.Index], job.Tags, job.Visit.Folder, restored);
+                scan.Advance();
+            });
+        }
+
+        // A deleted file that is back (restored from the recycle bin) gets its old tags
+        // written again. That invalidates this folder's listing, so it is read once more.
+        foreach (var folder in restored.GroupBy(r => r.Folder, StoredPath.Comparer))
+        {
+            try { _tags.RestoreRemoved(folder.Key, folder.Select(r => r.Name)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug("Could not restore tags in {Folder}: {Msg}", folder.Key, ex.Message);
+            }
+        }
     }
 
-    private MediaFile Describe(FileInfo info, TagsFile tagsFile)
+    private MediaFile Describe(FileInfo info, TagsFile tagsFile, string folder,
+        ConcurrentBag<(string Folder, string Name)> restored)
     {
         tagsFile.Files.TryGetValue(info.Name, out var tags);
+        if (tags == null && TagsService.PeekRemoved(tagsFile, info.Name) is { } kept)
+        {
+            // Shown now; written back once the scan is done.
+            tags = kept;
+            restored.Add((folder, info.Name));
+        }
         tags ??= new FileTags();
 
         // Parsing metadata dominates a library scan, so it happens once per
@@ -294,6 +335,8 @@ public class LibraryIndex : IDisposable
 
         // Writes to anything that is not media or tags cannot change a listing.
         if (e.ChangeType == WatcherChangeTypes.Changed && !IsMediaFile(name) && !IsTagsFile(name)) return;
+        // Our own safe writes create and drop these around every tags save.
+        if (name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bak", StringComparison.OrdinalIgnoreCase)) return;
 
         InvalidateParent(e.FullPath);
         if (e.ChangeType == WatcherChangeTypes.Deleted) InvalidateTree(e.FullPath);
