@@ -121,6 +121,16 @@ public class LibraryIndex : IDisposable
         return result;
     }
 
+    /// <summary>Changes whenever any listing may have changed; a result built at one value is good until it moves.</summary>
+    public long Generation => Volatile.Read(ref _generation);
+
+    /// <summary>True when changes under <paramref name="root"/> are being reported, so what was read can be kept.</summary>
+    public bool IsWatched(string root)
+    {
+        var full = Normalize(root);
+        lock (_watchGate) return _watchers.Any(w => IsUnder(full, w.Path));
+    }
+
     /// <summary>Forgets one folder's listing; the next request reads it again.</summary>
     public void Invalidate(string folderPath)
     {

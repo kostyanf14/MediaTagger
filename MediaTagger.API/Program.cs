@@ -6,7 +6,10 @@ builder.Services.AddControllers(options =>
 {
     options.Filters.Add<MediaTagger.API.Controllers.ApiExceptionFilter>();
     options.Filters.Add<MediaTagger.API.Controllers.LibraryScopeFilter>();
-});
+})
+// A listing of a whole library is mostly fields that are not there; leave them out of the answer.
+.AddJsonOptions(options => options.JsonSerializerOptions.DefaultIgnoreCondition =
+    System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<CacheLocator>();
@@ -53,6 +56,18 @@ builder.WebHost.ConfigureKestrel(opts =>
 });
 builder.WebHost.UseUrls(gate.ListenUrl);
 
+// Across a network the listing of a big library is megabytes of JSON; compressed it is a
+// fraction of that. On localhost there is no wire to save, only CPU to spend.
+if (gate.Key is not null)
+{
+    builder.Services.AddResponseCompression(options =>
+    {
+        // The key travels in a header, never in a body, so compressing over HTTPS reveals nothing.
+        options.EnableForHttps = true;
+        options.MimeTypes = new[] { "application/json" };
+    });
+}
+
 // A name that is not ours in the Host header is how a web page rebinds its own address
 // onto this machine. On localhost only localhost names are served; on a network address
 // the HTTPS certificate and the key already stand in the way.
@@ -68,6 +83,7 @@ if (gate.Key is null)
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+if (gate.Key is not null) app.UseResponseCompression();
 app.UseCors("ElectronPolicy");
 NetworkAccess.UseKeyCheck(app, gate.Key);
 app.UseStaticFiles();

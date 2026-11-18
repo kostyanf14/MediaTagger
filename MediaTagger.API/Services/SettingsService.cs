@@ -56,7 +56,8 @@ public class SettingsService
             DefaultPhotographer = current.DefaultPhotographer,
             CloseViewerOnOutsideClick = current.CloseViewerOnOutsideClick,
             DoubleClickFullscreen = current.DoubleClickFullscreen,
-            CopyPhotoOnCtrlC = current.CopyPhotoOnCtrlC
+            CopyPhotoOnCtrlC = current.CopyPhotoOnCtrlC,
+            ThumbnailCacheGb = current.ThumbnailCacheGb
         };
         if (next.DefaultFolder == current.DefaultFolder
             && next.RecentFolders.SequenceEqual(current.RecentFolders)

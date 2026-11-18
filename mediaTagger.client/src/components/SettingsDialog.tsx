@@ -32,6 +32,23 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
   const [threadsDraft, setThreadsDraft] = useState(settings.faceThreads ?? 0)
   const [backup, setBackup] = useState<{ state: 'idle' | 'working' | 'done' | 'failed'; note?: string }>({ state: 'idle' })
 
+  const [cache, setCache] = useState<{ bytes: number; files: number; limitBytes: number } | null>(null)
+  const [cacheGb, setCacheGb] = useState(String(settings.thumbnailCacheGb ?? 10))
+
+  const loadCache = () => {
+    settingsApi.thumbnailCache().then(res => setCache(res.data)).catch(() => setCache(null))
+  }
+
+  const saveCacheLimit = () => {
+    const gb = Math.round(Number(cacheGb))
+    if (!Number.isFinite(gb) || gb < 1 || gb > 1000) { setCacheGb(String(settings.thumbnailCacheGb ?? 10)); return }
+    if (gb !== (settings.thumbnailCacheGb ?? 10)) void save({ thumbnailCacheGb: gb }).then(loadCache)
+  }
+
+  const clearCache = () => {
+    settingsApi.clearThumbnailCache().then(loadCache).catch(() => {})
+  }
+
   const makeBackup = () => {
     setBackup({ state: 'working' })
     settingsApi.backup()
@@ -53,7 +70,9 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
   useEffect(() => {
     if (!open) return
     setThreadsDraft(settings.faceThreads ?? 0)
+    setCacheGb(String(settings.thumbnailCacheGb ?? 10))
     loadDevice()
+    loadCache()
   }, [open])
 
   const save = async (patch: Partial<AppSettings>, recheckDevice = false) => {
@@ -213,6 +232,22 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
                   Відеокарта не запрацювала, використовується процесор.
                 </Typography>
           ) : null}
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        <Typography variant="subtitle2">Кеш мініатюр</Typography>
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          {cache
+            ? `Зараз ${(cache.bytes / 1024 ** 3).toFixed(2)} ГБ, файлів: ${cache.files.toLocaleString('uk-UA')}. `
+            : ''}
+          Коли місце закінчується, першими зникають мініатюри, які давно не показували; вони створюються наново.
+        </Typography>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <TextField size="small" type="number" label="Ліміт, ГБ" value={cacheGb}
+            onChange={e => setCacheGb(e.target.value)} onBlur={saveCacheLimit}
+            inputProps={{ min: 1, max: 1000 }} sx={{ width: 110 }} />
+          <Button size="small" variant="outlined" onClick={clearCache}>Очистити</Button>
         </Box>
 
         <Divider sx={{ my: 2 }} />

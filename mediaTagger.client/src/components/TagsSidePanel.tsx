@@ -499,7 +499,7 @@ export function TagsSidePanel({
           {/* Thumbnail — videos show their extracted frame */}
           <Box sx={{ px: 2, pb: 1 }}>
             <Thumbnail
-              src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE)}
+              src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE, null, file.modified)}
               alt={file.fileName}
               type={file.type}
               iconSize={32}

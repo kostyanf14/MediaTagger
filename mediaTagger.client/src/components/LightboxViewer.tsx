@@ -19,7 +19,7 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove'
-import { MediaFile, apiIsLocal, mediaApi, THUMB_SIZE, THUMB_SIZE_SMALL } from '../api/client'
+import { MediaFile, apiIsLocal, mediaApi, needsViewerRendition, THUMB_SIZE, THUMB_SIZE_SMALL, VIEWER_SIZE } from '../api/client'
 import { remoteHides } from '../remoteUi'
 import { Thumbnail } from './Thumbnail'
 import { useElectron } from '../hooks/useElectron'
@@ -72,6 +72,12 @@ function pictureRect(img: HTMLImageElement) {
   return { left, top, right: left + width, bottom: top + height }
 }
 
+/** The address of the big picture: the original, or a rendition when the original is more than the screen can use. */
+function viewerSrc(file: MediaFile, original: boolean): string {
+  const rendition = !original && needsViewerRendition(file)
+  return mediaApi.getThumbnailUrl(file.filePath, rendition ? VIEWER_SIZE : undefined, null, file.modified)
+}
+
 export function LightboxViewer({
   file, files, onClose, onNavigate, onOpenTags, contextLabel, onShowInApp, onDelete, onRename, onMove,
   closeOnOutsideClick, fullscreen, copyPhoto = true, paused
@@ -88,6 +94,8 @@ export function LightboxViewer({
   const [panning, setPanning] = useState(false)
   // Which file's full-size picture has arrived; until then its tile preview stands in.
   const [loadedPath, setLoadedPath] = useState<string | null>(null)
+  // Zooming in is what needs the original; until then a screen-sized rendition is enough.
+  const [fullRes, setFullRes] = useState(false)
   // Held so the browser does not drop the neighbours' downloads half-way.
   const preloaded = useRef<HTMLImageElement[]>([])
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -133,6 +141,9 @@ export function LightboxViewer({
 
   const resetZoom = useCallback(() => setView({ zoom: MIN_ZOOM, x: 0, y: 0 }), [])
 
+  // Zoomed in, the picture has to be the real one.
+  useEffect(() => { if (view.zoom > MIN_ZOOM) setFullRes(true) }, [view.zoom])
+
   const goPrev = useCallback(() => {
     if (currentIndex > 0) onNavigate(files[currentIndex - 1])
   }, [currentIndex, files, onNavigate])
@@ -157,6 +168,7 @@ export function LightboxViewer({
   useEffect(() => {
     setVideoError(false)
     setLoadedPath(null)
+    setFullRes(false)
     resetZoom()
   }, [file?.filePath, resetZoom])
 
@@ -171,7 +183,7 @@ export function LightboxViewer({
         // Same mode as the viewer's own <img>, so the two share a cache entry.
         img.crossOrigin = 'anonymous'
         img.decoding = 'async'
-        img.src = mediaApi.getThumbnailUrl(f.filePath)
+        img.src = viewerSrc(f, false)
         return img
       })
   }, [currentIndex, files])
@@ -455,7 +467,7 @@ export function LightboxViewer({
                   <Box
                     component="img"
                     crossOrigin="anonymous"
-                    src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE)}
+                    src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE, null, file.modified)}
                     alt=""
                     sx={{
                       position: 'absolute', inset: 0, width: '100%', height: '100%',
@@ -464,7 +476,7 @@ export function LightboxViewer({
                   />
                 )}
                 <Thumbnail
-                  src={mediaApi.getThumbnailUrl(file.filePath)}
+                  src={viewerSrc(file, fullRes)}
                   alt={file.fileName}
                   objectFit="contain"
                   iconSize={64}

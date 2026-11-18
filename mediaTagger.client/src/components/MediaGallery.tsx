@@ -140,7 +140,7 @@ const Tile = memo(function Tile({ file, selected, dragging, onClick, onDoubleCli
       onDoubleClick={() => onDoubleClick(file)}
     >
       <Thumbnail
-        src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE)}
+        src={mediaApi.getThumbnailUrl(file.filePath, THUMB_SIZE, null, file.modified)}
         alt={file.fileName}
         type={file.type}
         iconSize={40}
