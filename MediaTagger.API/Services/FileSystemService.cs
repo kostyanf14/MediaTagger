@@ -152,7 +152,7 @@ public class FileSystemService
         try
         {
             foreach (var dir in Directory.EnumerateDirectories(rootPath)
-                         .Where(d => !Path.GetFileName(d).StartsWith('.')))
+                         .Where(d => !LibraryIndex.IsSkippedFolder(Path.GetFileName(d))))
             {
                 node.Children.Add(GetFolderTree(dir, depth - 1));
             }

@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain, shell, nativeImage, clipboard } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, nativeImage, clipboard, protocol, net } = require('electron')
 const path = require('path')
+const { pathToFileURL } = require('url')
 const { spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
@@ -11,9 +12,77 @@ let dotnetProcess
 
 // Empty until whenReady reads a saved address. An env var set at launch wins.
 let API_URL = (process.env.MEDIATAGGER_API_URL || process.env.VITE_API_ORIGIN || '').replace(/\/$/, '')
-const CLIENT_URL = process.env.NODE_ENV === 'development'
+const DEV = process.env.NODE_ENV === 'development'
+
+// The built window is served from its own scheme rather than file://. A file:// page
+// sends "Origin: null", which every sandboxed frame on the web can send too, so the
+// API could not tell it apart from a stranger's page.
+const APP_SCHEME = 'app'
+const APP_ORIGIN = `${APP_SCHEME}://mediatagger`
+const BUILD_DIR = path.normalize(path.join(__dirname, '../mediaTagger.client/build'))
+const CLIENT_URL = DEV
   ? (process.env.MEDIATAGGER_CLIENT_URL || 'http://localhost:3000')
-  : `file://${path.join(__dirname, '../mediaTagger.client/build/index.html')}`
+  : `${APP_ORIGIN}/index.html`
+
+// What the page may load. Images and the API can live on any host (a NAS, map tiles),
+// but scripts only come from the app itself.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: http: https:",
+  "media-src 'self' blob: http: https:",
+  "connect-src 'self' http: https:",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'"
+].join('; ')
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
+])
+
+// Files the page may ask the system to open, reveal, drag or copy. A compromised page
+// must not be able to start an arbitrary program through shell.openPath.
+const MEDIA_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic', '.heif',
+  '.mp4', '.mov', '.avi', '.mkv', '.wmv', '.m4v', '.webm', '.mts', '.m2ts', '.3gp'
+])
+
+function isMediaFile(filePath) {
+  return typeof filePath === 'string'
+    && path.isAbsolute(filePath)
+    && MEDIA_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
+/** Only our own window may use the privileged calls below. */
+function fromOurWindow(event) {
+  const url = event.senderFrame?.url || event.sender?.getURL?.() || ''
+  return url.startsWith(`${APP_ORIGIN}/`) || (DEV && url.startsWith(new URL(CLIENT_URL).origin + '/'))
+}
+
+async function serveClient(request) {
+  let relative = '/index.html'
+  try {
+    const { pathname } = new URL(request.url)
+    if (pathname && pathname !== '/') relative = decodeURIComponent(pathname)
+  } catch {
+    return new Response('Bad request', { status: 400 })
+  }
+  const file = path.normalize(path.join(BUILD_DIR, relative))
+  if (file !== BUILD_DIR && !file.startsWith(BUILD_DIR + path.sep))
+    return new Response('Forbidden', { status: 403 })
+
+  let response
+  try { response = await net.fetch(pathToFileURL(file).toString()) }
+  catch { return new Response('Not found', { status: 404 }) }
+
+  if (path.extname(file).toLowerCase() !== '.html') return response
+  const headers = new Headers(response.headers)
+  headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
+  return new Response(response.body, { status: response.status, headers })
+}
 
 function isLoopback(url) {
   return apiHostIsLocal(url)
@@ -98,7 +167,13 @@ function startDotnetApi() {
   // first and runs unoptimised code, so it is only the fallback for a checkout
   // that has not been built yet. Both run from the project folder, which is what
   // the API resolves appsettings.json and its caches against.
-  const apiEnv = { ...process.env, MediaTagger__ListenUrl: API_URL }
+  // The API answers browser calls only from the window's own origin.
+  const clientOrigins = [APP_ORIGIN, new URL(CLIENT_URL).origin].filter((o, i, all) => o !== 'null' && all.indexOf(o) === i)
+  const apiEnv = {
+    ...process.env,
+    MediaTagger__ListenUrl: API_URL,
+    MediaTagger__ClientOrigins: process.env.MediaTagger__ClientOrigins || clientOrigins.join(',')
+  }
   dotnetProcess = fs.existsSync(PUBLISHED_API)
     ? spawn(PUBLISHED_API, [], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
     : spawn('dotnet', ['run'], { cwd: apiPath, stdio: 'pipe', env: apiEnv })
@@ -161,11 +236,21 @@ async function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
 
+  // Links (map attributions, say) open in the browser; the window itself never leaves the app.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = url.startsWith(`${APP_ORIGIN}/`) || (DEV && url.startsWith(new URL(CLIENT_URL).origin + '/'))
+    if (!allowed) event.preventDefault()
+  })
+
   try { await waitForApi() } catch {}
 
   mainWindow.loadURL(CLIENT_URL)
 
-  if (process.env.NODE_ENV === 'development') {
+  if (DEV) {
     mainWindow.webContents.openDevTools()
   }
 }
@@ -213,8 +298,8 @@ function buildDragIcon(previewDataUrl, filePath) {
   return null
 }
 
-ipcMain.on('start-native-drag', (event, { filePath, previewDataUrl }) => {
-  if (!filePath || !fs.existsSync(filePath)) return
+ipcMain.on('start-native-drag', (event, { filePath, previewDataUrl } = {}) => {
+  if (!fromOurWindow(event) || !isMediaFile(filePath) || !fs.existsSync(filePath)) return
 
   const icon = buildDragIcon(previewDataUrl, filePath)
   if (!icon) return
@@ -226,7 +311,8 @@ ipcMain.on('start-native-drag', (event, { filePath, previewDataUrl }) => {
   }
 })
 
-ipcMain.handle('select-folder', async () => {
+ipcMain.handle('select-folder', async event => {
+  if (!fromOurWindow(event)) return null
   const { dialog } = require('electron')
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
@@ -235,6 +321,7 @@ ipcMain.handle('select-folder', async () => {
 })
 
 ipcMain.on('reveal-in-explorer', (event, filePath) => {
+  if (!fromOurWindow(event) || typeof filePath !== 'string' || !path.isAbsolute(filePath)) return
   shell.showItemInFolder(filePath)
 })
 
@@ -242,9 +329,10 @@ ipcMain.on('reveal-in-explorer', (event, filePath) => {
 // Chromium cannot decode.
 // A JPEG or PNG from disk pastes into Telegram. HEIC and the rest come back empty,
 // and the page sends a PNG it decoded through the thumbnail API instead.
-ipcMain.handle('copy-image', (_event, { filePath, dataUrl } = {}) => {
+ipcMain.handle('copy-image', (event, { filePath, dataUrl } = {}) => {
+  if (!fromOurWindow(event)) return false
   let image = nativeImage.createEmpty()
-  if (filePath && fs.existsSync(filePath)) {
+  if (isMediaFile(filePath) && fs.existsSync(filePath)) {
     try { image = nativeImage.createFromPath(filePath) } catch { image = nativeImage.createEmpty() }
   }
   if (image.isEmpty() && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
@@ -255,7 +343,8 @@ ipcMain.handle('copy-image', (_event, { filePath, dataUrl } = {}) => {
   return true
 })
 
-ipcMain.handle('set-api-origin', async (_event, raw) => {
+ipcMain.handle('set-api-origin', async (event, raw) => {
+  if (!fromOurWindow(event)) throw new Error('not allowed')
   const next = normalizeApiOrigin(raw)
   if (!next) throw new Error('bad origin')
   const file = originFile()
@@ -279,6 +368,7 @@ ipcMain.handle('set-api-origin', async (_event, raw) => {
 })
 
 ipcMain.on('open-file', (event, filePath) => {
+  if (!fromOurWindow(event) || !isMediaFile(filePath)) return
   shell.openPath(filePath).then(err => {
     // Resolves with a non-empty string when nothing could open the file.
     if (err) console.error(`[open-file] ${filePath}: ${err}`)
@@ -286,9 +376,10 @@ ipcMain.on('open-file', (event, filePath) => {
 })
 
 app.whenReady().then(async () => {
+  protocol.handle(APP_SCHEME, serveClient)
   if (!API_URL) applyApiOrigin(readSavedOrigin() || 'http://localhost:5001')
   // A remote API (the NAS) is already running; only a loopback URL is started here.
-  if (process.env.NODE_ENV !== 'development' && isLoopback(API_URL)) startDotnetApi()
+  if (!DEV && isLoopback(API_URL)) startDotnetApi()
   await createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

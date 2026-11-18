@@ -604,6 +604,20 @@ public class FaceStore : IDisposable
         Execute($"ALTER TABLE {table} ADD COLUMN {column} {definition}");
     }
 
+    /// <summary>
+    /// Writes a consistent copy of the database to <paramref name="destination"/>, which
+    /// must not exist yet. Safe while the scan is running; a plain file copy is not.
+    /// </summary>
+    public void BackupTo(string destination)
+    {
+        lock (_gate)
+        {
+            using var command = Command("VACUUM INTO $path");
+            command.Parameters.AddWithValue("$path", destination);
+            command.ExecuteNonQuery();
+        }
+    }
+
     public void Dispose()
     {
         _connection.Dispose();

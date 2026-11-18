@@ -19,10 +19,13 @@ import { Thumbnail } from './Thumbnail'
 import { PhotoFaces } from './PhotoFaces'
 import { PlaceHint } from './PlaceHint'
 import { useElectron } from '../hooks/useElectron'
+import { describeApiError } from '../utils/apiErrors'
 
 // Long enough that adding three tags in a row is one write, short enough that
 // closing the panel straight after a click still lands.
 const AUTOSAVE_DELAY_MS = 600
+// Typed text is saved too, but only once the typing has paused: half a note is not worth a write.
+const TEXT_AUTOSAVE_DELAY_MS = 1500
 // How many thumbnails the bulk header shows before collapsing into a count.
 const BULK_PREVIEW_COUNT = 5
 
@@ -140,6 +143,8 @@ export function TagsSidePanel({
   const [dateTakenStr, setDateTakenStr] = useState('')
   const [saving, setSaving] = useState(false)
   const [autoSave, setAutoSave] = useState<SaveState>('idle')
+  // Why the last save failed, when the server said.
+  const [saveError, setSaveError] = useState('')
   const [bulkPeople, setBulkPeople] = useState<string[]>([])
   const [bulkGroups, setBulkGroups] = useState<string[]>([])
   const [bulkAlbums, setBulkAlbums] = useState<string[]>([])
@@ -169,6 +174,7 @@ export function TagsSidePanel({
       )
       setDateTakenStr(toDateTimeLocal(file.tags.dateTaken))
       setAutoSave('idle')
+      setSaveError('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.filePath])
@@ -195,15 +201,15 @@ export function TagsSidePanel({
       setBulkResult(`Оновлено файлів: ${res.data}`)
       setBulkPeople([]); setBulkGroups([]); setBulkAlbums([]); setBulkPlace(''); setBulkPhotographer('')
       onSaved(request)
-    } catch {
-      setBulkResult('Не вдалося застосувати теги')
+    } catch (e) {
+      setBulkResult(describeApiError(e, 'Не вдалося застосувати теги'))
     } finally {
       setSaving(false)
     }
   }
 
   // Combines the chip state with the free-text fields into what actually gets written.
-  const buildTags = useCallback((source: FileTags, coordText: string = coordStr): FileTags => {
+  const buildTags = useCallback((source: FileTags, coordText: string = coordStr, dateText: string = dateTakenStr): FileTags => {
     const finalTags = { ...source }
     if (coordText.trim()) {
       const parts = coordText.split(',').map(s => parseFloat(s.trim()))
@@ -213,11 +219,14 @@ export function TagsSidePanel({
     } else {
       finalTags.coordinates = undefined
     }
-    // datetime-local has no timezone — new Date() interprets it as local time,
-    // matching what the picker displayed.
-    finalTags.dateTaken = dateTakenStr ? new Date(dateTakenStr).toISOString() : undefined
+    // The field shows the date to the minute, so a date nobody touched is sent back as it
+    // was stored — with its seconds, and in the form it came in. One that was edited is
+    // the wall-clock time typed, with no timezone: that is how a camera records it.
+    if (!dateText) finalTags.dateTaken = undefined
+    else if (dateText === toDateTimeLocal(file?.tags.dateTaken)) finalTags.dateTaken = file?.tags.dateTaken
+    else finalTags.dateTaken = `${dateText}:00`
     return finalTags
-  }, [coordStr, dateTakenStr])
+  }, [coordStr, dateTakenStr, file?.tags.dateTaken])
 
   const write = useCallback(async (path: string, payload: FileTags) => {
     await mediaApi.updateTags(path, payload)
@@ -236,20 +245,11 @@ export function TagsSidePanel({
   // Switching files or closing the panel must not swallow a tag the user just added.
   useEffect(() => flushPending, [file?.filePath, flushPending])
 
-  /**
-   * A finished tag edit — a chip added or removed, a place picked from the list —
-   * saves itself. Typing does not: nobody wants half a word written to disk on
-   * every keystroke, so free text still waits for the button.
-   */
-  const applyTagChange = (patch: Partial<FileTags>, coordText?: string) => {
-    if (!file) return
-    const next = { ...tags, ...patch }
-    setTags(next)
-    setSavedPlace(next.place)
-
-    const payload = buildTags(next, coordText)
-    pending.current = { path: file.filePath, tags: payload }
+  /** Promises a write and sends it once nothing else has been edited for <paramref name="delay"/> ms. */
+  const queueWrite = (path: string, payload: FileTags, delay: number) => {
+    pending.current = { path, tags: payload }
     setAutoSave('saving')
+    setSaveError('')
 
     clearTimeout(autoSaveTimer.current)
     autoSaveTimer.current = setTimeout(async () => {
@@ -259,10 +259,34 @@ export function TagsSidePanel({
       try {
         await write(owed.path, owed.tags)
         setAutoSave('saved')
-      } catch {
+      } catch (e) {
+        setSaveError(describeApiError(e, ''))
         setAutoSave('error')
       }
-    }, AUTOSAVE_DELAY_MS)
+    }, delay)
+  }
+
+  /**
+   * A finished tag edit — a chip added or removed, a place picked from the list —
+   * saves itself shortly after.
+   */
+  const applyTagChange = (patch: Partial<FileTags>, coordText?: string) => {
+    if (!file) return
+    const next = { ...tags, ...patch }
+    setTags(next)
+    setSavedPlace(next.place)
+    queueWrite(file.filePath, buildTags(next, coordText), AUTOSAVE_DELAY_MS)
+  }
+
+  /**
+   * Typed text — a note, the date, the coordinates — is saved too, after a pause. The
+   * place field is left as last saved: its text is only a pick in progress.
+   */
+  const applyTextChange = (patch: Partial<FileTags>, coordText?: string, dateText?: string) => {
+    if (!file) return
+    const next = { ...tags, ...patch }
+    setTags(next)
+    queueWrite(file.filePath, buildTags({ ...next, place: savedPlace }, coordText, dateText), TEXT_AUTOSAVE_DELAY_MS)
   }
 
   const handleSave = async () => {
@@ -278,7 +302,9 @@ export function TagsSidePanel({
       // which looks like the whole page reloading.
       await write(file.filePath, buildTags(tags))
       setAutoSave('saved')
-    } catch {
+      setSaveError('')
+    } catch (e) {
+      setSaveError(describeApiError(e, ''))
       setAutoSave('error')
     } finally {
       setSaving(false)
@@ -500,7 +526,7 @@ export function TagsSidePanel({
               type="datetime-local"
               size="small"
               value={dateTakenStr}
-              onChange={e => setDateTakenStr(e.target.value)}
+              onChange={e => { setDateTakenStr(e.target.value); applyTextChange({}, undefined, e.target.value) }}
               InputLabelProps={{ shrink: true }}
               helperText={
                 file.exif?.dateTaken
@@ -595,7 +621,7 @@ export function TagsSidePanel({
                 size="small"
                 sx={{ flex: 1 }}
                 value={coordStr}
-                onChange={e => setCoordStr(e.target.value)}
+                onChange={e => { setCoordStr(e.target.value); applyTextChange({}, e.target.value) }}
                 placeholder="50.4501, 30.5234"
                 InputProps={{
                   startAdornment: <LocationOnIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
@@ -618,7 +644,7 @@ export function TagsSidePanel({
               size="small"
               multiline rows={3}
               value={tags.notes}
-              onChange={e => setTags(t => ({ ...t, notes: e.target.value }))}
+              onChange={e => applyTextChange({ notes: e.target.value })}
             />
           </Box>
 
@@ -632,7 +658,7 @@ export function TagsSidePanel({
               >
                 {autoSave === 'saving' && 'Збереження тегів…'}
                 {autoSave === 'saved' && '✓ Теги збережено'}
-                {autoSave === 'error' && 'Не вдалося зберегти — натисніть «Зберегти теги»'}
+                {autoSave === 'error' && (saveError || 'Не вдалося зберегти — натисніть «Зберегти теги»')}
               </Typography>
             )}
             <Button

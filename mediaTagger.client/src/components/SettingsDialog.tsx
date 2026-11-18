@@ -4,7 +4,7 @@ import {
   RadioGroup, FormControlLabel, Radio, Box, Slider, Switch, Divider, CircularProgress,
   Autocomplete, TextField
 } from '@mui/material'
-import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi } from '../api/client'
+import { AppSettings, VideoFaceMode, FaceDeviceInfo, facesApi, settingsApi } from '../api/client'
 import { ServerConnect } from './ServerConnect'
 
 const VIDEO_MODES: { value: VideoFaceMode; label: string; hint: string }[] = [
@@ -30,6 +30,17 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
   const [checkingDevice, setCheckingDevice] = useState(false)
   // The slider moves freely; only where it is let go is saved, since each save restarts the scan.
   const [threadsDraft, setThreadsDraft] = useState(settings.faceThreads ?? 0)
+  const [backup, setBackup] = useState<{ state: 'idle' | 'working' | 'done' | 'failed'; note?: string }>({ state: 'idle' })
+
+  const makeBackup = () => {
+    setBackup({ state: 'working' })
+    settingsApi.backup()
+      .then(res => setBackup({
+        state: 'done',
+        note: `Збережено: ${res.data.path} (файлів тегів: ${res.data.tagFiles}${res.data.faces ? ', обличчя' : ''})`
+      }))
+      .catch(() => setBackup({ state: 'failed' }))
+  }
 
   const loadDevice = () => {
     setCheckingDevice(true)
@@ -203,6 +214,30 @@ export function SettingsDialog({ open, settings, people, onChange, onClose }: Pr
                 </Typography>
           ) : null}
         </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        <Typography variant="subtitle2">Копія тегів</Typography>
+        <Typography variant="caption" color="text.secondary" display="block" lineHeight={1.4} sx={{ mt: 0.5 }}>
+          Раз на добу всі файли тегів і база облич пакуються в архів у каталозі кешу API, останніх 14 копій
+          лишається. Цією кнопкою копію можна зробити зараз.
+        </Typography>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Button size="small" variant="outlined" disabled={backup.state === 'working'} onClick={makeBackup}>
+            Зробити копію зараз
+          </Button>
+          {backup.state === 'working' && <CircularProgress size={14} />}
+        </Box>
+        {backup.state === 'done' && (
+          <Typography variant="caption" color="success.main" display="block" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
+            {backup.note}
+          </Typography>
+        )}
+        {backup.state === 'failed' && (
+          <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
+            Не вдалося зробити копію. Деталі — у журналі API.
+          </Typography>
+        )}
 
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 2 }}>
           Після зміни пошук облич перезапускається: доробляє відео, оброблені простіше, ніж обрано,

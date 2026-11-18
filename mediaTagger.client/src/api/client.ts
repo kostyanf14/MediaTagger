@@ -383,5 +383,7 @@ export const placesApi = {
 
 export const settingsApi = {
   get: () => api.get<AppSettings>('/settings'),
-  save: (settings: AppSettings) => api.put('/settings', settings)
+  save: (settings: AppSettings) => api.put('/settings', settings),
+  // Zips every tags file and the face database into the API's cache folder.
+  backup: () => api.post<{ path: string; tagFiles: number; faces: boolean }>('/settings/backup')
 }

@@ -67,6 +67,15 @@ public class MediaRename
         if (string.IsNullOrEmpty(parent)) return new RenameOutcome { Code = "invalid" };
 
         var currentName = Path.GetFileName(source);
+
+        // A file that loses its extension — "IMG_1.jpg" renamed to "Beach" — would drop
+        // out of the gallery. Keep the original one unless the new name has a media one.
+        if (!isDir && !LibraryIndex.IsMediaFile(newName))
+        {
+            newName += Path.GetExtension(currentName);
+            if (BadName(newName)) return new RenameOutcome { Code = "invalid" };
+        }
+
         if (currentName.Equals(newName, StringComparison.Ordinal))
             return new RenameOutcome { Path = source, Settings = _settings.Get() };
 
@@ -96,6 +105,11 @@ public class MediaRename
         // A folder cannot be moved into itself.
         if (isDir && StoredPath.IsUnder(destination, source)) return new RenameOutcome { Code = "invalid" };
 
+        // A folder cannot be moved to another drive in one step; a file can, so only a
+        // folder gets its own answer, and the message can say why.
+        if (isDir && !StoredPath.Same(Path.GetPathRoot(source) ?? "", Path.GetPathRoot(destination) ?? ""))
+            return new RenameOutcome { Code = "cross_volume" };
+
         return Relocate(source, Path.Combine(destination, Path.GetFileName(source)), merge, isDir);
     }
 
@@ -120,7 +134,7 @@ public class MediaRename
         {
             var folder = Path.GetDirectoryName(file) ?? "";
             if (!tagsByFolder.TryGetValue(folder, out var tags))
-                tagsByFolder[folder] = tags = _tags.ReadTagsFile(folder);
+                tagsByFolder[folder] = tags = _tags.ReadForWrite(folder);
             var date = CaptureDate(file, tags);
             var destDir = date == null
                 ? Path.Combine(root, "0000")
@@ -131,6 +145,10 @@ public class MediaRename
             if (File.Exists(dest) || !reserved.Add(dest)) { skipped++; continue; }
             planned.Add((file, dest, date == null));
         }
+
+        // Nothing is moved while a tags file it would have to update cannot be read.
+        foreach (var destDir in planned.Select(p => Path.GetDirectoryName(p.Dest) ?? "").Distinct(StoredPath.Comparer))
+            if (!tagsByFolder.ContainsKey(destDir)) _tags.ReadForWrite(destDir);
 
         var done = new List<(string Source, string Dest, bool Undated)>();
         Exception? failure = null;
@@ -191,7 +209,9 @@ public class MediaRename
     {
         var name = Path.GetFileName(file);
         var key = tags.Files.Keys.FirstOrDefault(k => k.Equals(name, StoredPath.Comparison));
-        if (key != null && tags.Files[key].DateTaken != null) return tags.Files[key].DateTaken;
+        // A date saved with a trailing Z is UTC; the folder should follow the clock on the wall.
+        if (key != null && tags.Files[key].DateTaken is { } saved)
+            return saved.Kind == DateTimeKind.Utc ? saved.ToLocalTime() : saved;
         var info = new FileInfo(file);
         return _exif.GetOrRead(file, info, _exifReader.ReadExif)?.DateTaken ?? DateFromFileName(info.Name);
     }
@@ -220,7 +240,7 @@ public class MediaRename
                     // with the same file names as the photos. Walking them counts those
                     // copies as "name already exists" and hides them from the folder view.
                     var name = Path.GetFileName(entry);
-                    if ((attr & FileAttributes.ReparsePoint) == 0 && !IsHiddenSystemDir(name))
+                    if ((attr & FileAttributes.ReparsePoint) == 0 && !LibraryIndex.IsSkippedFolder(name))
                         pending.Push(entry);
                 }
                 else if (LibraryIndex.IsMediaFile(entry) && !IsHiddenSystemDir(Path.GetFileName(entry)))
@@ -242,6 +262,18 @@ public class MediaRename
             && StoredPath.Same(Path.GetDirectoryName(dest)!, parent);
         var merged = false;
 
+        // Whatever has to be updated afterwards must be readable before anything moves:
+        // a file moved and then left with a stale tags entry is the worse outcome.
+        if (!isDir)
+        {
+            _tags.ReadForWrite(parent);
+            _tags.ReadForWrite(Path.GetDirectoryName(dest)!);
+        }
+        else if (merge && !caseOnly && Directory.Exists(dest))
+        {
+            _tags.ReadForWrite(dest);
+        }
+
         // shortcut: a case-only change on a case-sensitive disk is treated as the same
         // folder. Two folders that differ only by case cannot both keep their names.
         if (caseOnly)
@@ -253,7 +285,22 @@ public class MediaRename
             if (!merge) return new RenameOutcome { Code = "merge", Destination = dest };
             var clash = FirstClash(source, dest);
             if (clash != null) return new RenameOutcome { Code = "exists", Name = clash };
-            MergeTree(source, dest);
+            var movedFiles = new List<(string OldPath, string NewPath)>();
+            var movedFolders = new List<(string OldPath, string NewPath)>();
+            try
+            {
+                MergeTree(source, dest, movedFiles, movedFolders);
+            }
+            catch
+            {
+                // A file held open elsewhere stops the merge halfway. What did move still
+                // needs its tags, faces and metadata pointed at the new place.
+                SettleMoved(movedFiles, movedFolders);
+                _fs.InvalidateFolder(parent);
+                _fs.InvalidateFolder(source);
+                _fs.InvalidateFolder(dest);
+                throw;
+            }
             merged = true;
         }
         else if (File.Exists(dest) || Directory.Exists(dest))
@@ -286,7 +333,8 @@ public class MediaRename
         return new RenameOutcome { Path = dest, Merged = merged, Settings = settings };
     }
 
-    private void MergeTree(string source, string dest)
+    private void MergeTree(string source, string dest, List<(string OldPath, string NewPath)> movedFiles,
+        List<(string OldPath, string NewPath)> movedFolders)
     {
         foreach (var entry in Directory.EnumerateFileSystemEntries(source).ToList())
         {
@@ -295,16 +343,54 @@ public class MediaRename
             var target = Path.Combine(dest, name);
             if (IsDirectory(entry))
             {
-                if (!Directory.Exists(target)) Directory.Move(entry, target);
-                else MergeTree(entry, target);
+                if (!Directory.Exists(target))
+                {
+                    Directory.Move(entry, target);
+                    movedFolders.Add((entry, target));
+                }
+                else MergeTree(entry, target, movedFiles, movedFolders);
             }
-            else File.Move(entry, target);
+            else
+            {
+                File.Move(entry, target);
+                movedFiles.Add((entry, target));
+            }
         }
 
         _tags.MergeFolderTags(source, dest);
         var tags = Path.Combine(source, TagsFileName);
-        if (File.Exists(tags)) File.Delete(tags);
+        if (File.Exists(tags))
+        {
+            // Only a file that was read and merged is deleted. One that could not be
+            // parsed goes along with the rest, under a name that says where it came from.
+            if (_tags.TryReadTagsFile(source, out _)) File.Delete(tags);
+            else File.Move(tags, Path.Combine(dest, $"{TagsFileName}.from-{Path.GetFileName(source)}.bak"), overwrite: true);
+        }
         Directory.Delete(source);
+    }
+
+    /// <summary>Carries every stored reference of files that did move to where they are now.</summary>
+    private void SettleMoved(IReadOnlyList<(string OldPath, string NewPath)> files,
+        IReadOnlyList<(string OldPath, string NewPath)> folders)
+    {
+        try
+        {
+            if (files.Count > 0)
+            {
+                _tags.MoveFileEntries(files);
+                _faces.RetargetAll(files);
+                _exif.RetargetAll(files);
+            }
+            foreach (var (oldPath, newPath) in folders)
+            {
+                _faces.Retarget(oldPath, newPath);
+                _exif.Retarget(oldPath, newPath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The failure that got us here is the one worth reporting.
+        }
     }
 
     /// <summary>A file or folder that would be overwritten, relative to the folder being merged. Null when it is safe.</summary>

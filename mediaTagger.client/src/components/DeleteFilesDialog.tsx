@@ -92,7 +92,7 @@ export function DeleteFilesDialog({ files, onCancel, onDeleted }: Props) {
           </Box>
         ) : permanent === 0 ? (
           <Typography variant="body2">
-            {count === 1 ? 'Файл буде переміщено' : 'Файли буде переміщено'} до кошика разом із тегами.
+            {count === 1 ? 'Файл буде переміщено' : 'Файли буде переміщено'} до кошика. Їхні теги збережуться ще на 90 днів: якщо відновити файл із кошика, теги повернуться.
           </Typography>
         ) : (
           <Alert severity="warning">

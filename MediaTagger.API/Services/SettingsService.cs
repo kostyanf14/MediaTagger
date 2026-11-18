@@ -73,7 +73,7 @@ public class SettingsService
         {
             before = _current ??= Load();
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            File.WriteAllText(_path, JsonSerializer.Serialize(settings, JsonOpts));
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(settings, JsonOpts));
             _current = settings;
         }
         Changed?.Invoke(before, settings);

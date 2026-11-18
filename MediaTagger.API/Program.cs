@@ -2,11 +2,16 @@ using MediaTagger.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<MediaTagger.API.Controllers.ApiExceptionFilter>();
+    options.Filters.Add<MediaTagger.API.Controllers.LibraryScopeFilter>();
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<CacheLocator>();
 builder.Services.AddSingleton<SettingsService>();
+builder.Services.AddSingleton<LibraryScope>();
 builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddSingleton<ExifCache>();
 builder.Services.AddSingleton<TagsService>();
@@ -21,11 +26,16 @@ builder.Services.AddSingleton<FaceIndexer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<FaceIndexer>());
 builder.Services.AddSingleton<FaceRecognitionService>();
 builder.Services.AddSingleton<PlaceSuggestionService>();
+builder.Services.AddSingleton<TagBackupService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TagBackupService>());
 
+// Only the app's own window may call the API from a browser context: a page the user
+// happens to have open elsewhere must not be able to talk to it.
+var clientOrigins = NetworkAccess.ClientOrigins(builder.Configuration["MediaTagger:ClientOrigins"]);
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("ElectronPolicy", policy =>
-        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+        policy.WithOrigins(clientOrigins).AllowAnyHeader().AllowAnyMethod());
 });
 
 // Localhost stays open. Any other listen address is the NAS case: HTTPS plus one key.
@@ -42,6 +52,13 @@ builder.WebHost.ConfigureKestrel(opts =>
         opts.ConfigureHttpsDefaults(https => https.ServerCertificate = gate.Certificate);
 });
 builder.WebHost.UseUrls(gate.ListenUrl);
+
+// A name that is not ours in the Host header is how a web page rebinds its own address
+// onto this machine. On localhost only localhost names are served; on a network address
+// the HTTPS certificate and the key already stand in the way.
+var allowedHosts = builder.Configuration["AllowedHosts"];
+if (gate.Key is null && (string.IsNullOrWhiteSpace(allowedHosts) || allowedHosts.Trim() == "*"))
+    builder.Configuration["AllowedHosts"] = NetworkAccess.LoopbackHosts;
 
 var app = builder.Build();
 

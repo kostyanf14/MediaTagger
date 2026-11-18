@@ -4,6 +4,7 @@ import {
 } from '@mui/material'
 import axios from 'axios'
 import { mediaApi, RenameResponse } from '../api/client'
+import { describeApiError } from '../utils/apiErrors'
 
 export interface RenameTarget {
   path: string
@@ -50,7 +51,7 @@ export function RenameDialog({ target, onCancel, onRenamed }: Props) {
       }
       setError(e && axios.isAxiosError(e) && e.response?.status === 400
         ? 'Недопустима назва'
-        : 'Не вдалося перейменувати')
+        : describeApiError(e, 'Не вдалося перейменувати'))
     } finally {
       setBusy(false)
     }

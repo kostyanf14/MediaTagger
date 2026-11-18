@@ -84,6 +84,7 @@ public class MediaController : ControllerBase
 
     /// <summary>Lets the client skip a remembered folder whose drive is not plugged in.</summary>
     [HttpGet("folder-exists")]
+    [OutsideLibraryScope]
     public ActionResult<bool> FolderExists([FromQuery] string folderPath)
         => Ok(!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath));
 
@@ -107,6 +108,7 @@ public class MediaController : ControllerBase
         if (outcome.Code == "merge") return Conflict(new { code = "merge", destination = outcome.Destination });
         if (outcome.Code == "exists") return Conflict(new { code = "exists", name = outcome.Name });
         if (outcome.Code == "missing") return NotFound();
+        if (outcome.Code == "cross_volume") return Conflict(new { code = "cross_volume" });
         if (outcome.Code != null) return BadRequest("Invalid move");
         return Ok(new RenameResponse { Path = outcome.Path!, Merged = outcome.Merged, Settings = outcome.Settings! });
     }
@@ -133,9 +135,11 @@ public class MediaController : ControllerBase
         if (!System.IO.File.Exists(filePath)) return NotFound();
         try
         {
-            _tags.RemoveFileTags(filePath);
-
+            // The file goes first: if the bin refuses it, nothing about it has changed.
             SendToTrash(filePath);
+            // Its tags are kept aside for a while, so a restore from the bin brings them back.
+            try { _tags.RemoveFileTags(filePath); }
+            catch (TagsFileUnreadableException) { /* the stale entry is harmless; the file is gone */ }
             _fs.InvalidateFolder(Path.GetDirectoryName(filePath) ?? "");
             return Ok();
         }

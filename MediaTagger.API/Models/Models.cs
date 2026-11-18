@@ -87,6 +87,18 @@ public class TagsFile
 {
     public int Version { get; set; } = 1;
     public Dictionary<string, FileTags> Files { get; set; } = new();
+    /// <summary>
+    /// Tags of files that were deleted, kept for a while so restoring one from the
+    /// recycle bin brings its tags back. Absent when there is nothing to keep.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, RemovedTags>? Removed { get; set; }
+}
+
+public class RemovedTags
+{
+    public FileTags Tags { get; set; } = new();
+    public DateTime At { get; set; }
 }
 
 public class FolderNode

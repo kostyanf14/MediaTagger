@@ -363,6 +363,103 @@ public class RenameTests
         Assert.Equal(new[] { "Анна" }, world.Tags.ReadTagsFile(Path.Combine(root, "2019", "10")).Files[name].People);
     }
 
+    [Fact]
+    public void A_date_saved_in_utc_is_filed_under_the_local_month()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("utc");
+        const string name = "a.jpg";
+        File.WriteAllBytes(Path.Combine(root, name), new byte[] { 1 });
+        File.WriteAllText(Path.Combine(root, "_tags.json"), """
+            { "files": { "a.jpg": { "people": [], "groups": [], "albums": [], "place": "", "notes": "",
+                "dateTaken": "2019-10-01T00:30:00Z" } } }
+            """);
+        var local = DateTime.SpecifyKind(new DateTime(2019, 10, 1, 0, 30, 0), DateTimeKind.Utc).ToLocalTime();
+
+        world.Rename.SortByDate(root);
+
+        Assert.True(File.Exists(Path.Combine(root, local.Year.ToString("D4"), local.Month.ToString("D2"), name)));
+    }
+
+    [Fact]
+    public void Sorting_refuses_to_move_anything_when_a_tags_file_is_unreadable()
+    {
+        using var world = new RenameWorld();
+        var root = world.Dir("broken");
+        var file = Path.Combine(root, "IMG_20191006_142317.jpg");
+        File.WriteAllBytes(file, new byte[] { 1 });
+        File.WriteAllText(Path.Combine(root, "_tags.json"), "{ \"files\": { \"IMG_2019");
+
+        Assert.Throws<TagsFileUnreadableException>(() => world.Rename.SortByDate(root));
+
+        Assert.True(File.Exists(file));
+        Assert.Equal("{ \"files\": { \"IMG_2019", File.ReadAllText(Path.Combine(root, "_tags.json")));
+    }
+
+    [Fact]
+    public void Renaming_a_photo_without_an_extension_keeps_the_original_one()
+    {
+        using var world = new RenameWorld();
+        var folder = world.Dir("ext");
+        var file = Path.Combine(folder, "IMG_1.jpg");
+        File.WriteAllBytes(file, new byte[] { 1 });
+
+        var outcome = world.Rename.Rename(file, "Beach", merge: false);
+
+        Assert.Null(outcome.Code);
+        Assert.Equal(Path.Combine(folder, "Beach.jpg"), outcome.Path);
+        Assert.True(File.Exists(Path.Combine(folder, "Beach.jpg")));
+    }
+
+    [Fact]
+    public void A_folder_cannot_be_moved_to_another_drive_in_one_step()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var world = new RenameWorld();
+        var folder = world.Dir("trip");
+        var other = DriveInfo.GetDrives().FirstOrDefault(d =>
+            d.IsReady && d.DriveType == DriveType.Fixed
+            && !string.Equals(d.RootDirectory.FullName, Path.GetPathRoot(folder), StringComparison.OrdinalIgnoreCase));
+        if (other == null) return;
+
+        var outcome = world.Rename.MoveInto(folder, other.RootDirectory.FullName, merge: false);
+
+        Assert.Equal("cross_volume", outcome.Code);
+        Assert.True(Directory.Exists(folder));
+    }
+
+    [Fact]
+    public void A_merge_that_stops_halfway_still_carries_over_what_moved()
+    {
+        using var world = new RenameWorld();
+        var source = world.Dir("src");
+        var dest = world.Dir("dst");
+        var moved = Path.Combine(source, "a.jpg");
+        var blocked = Path.Combine(source, "b.jpg");
+        File.WriteAllBytes(moved, new byte[] { 1 });
+        File.WriteAllBytes(blocked, new byte[] { 2 });
+        File.WriteAllText(Path.Combine(source, "_tags.json"), """
+            { "files": {
+                "a.jpg": { "people": ["Анна"], "groups": [], "albums": [], "place": "", "notes": "" },
+                "b.jpg": { "people": ["Олег"], "groups": [], "albums": [], "place": "", "notes": "" } } }
+            """);
+        var info = new FileInfo(moved);
+        world.Faces.Save(moved, info.Length, info.LastWriteTimeUtc.Ticks, 1, 8, 8,
+            new[] { new DetectedFace(0.1f, 0.1f, 0.2f, 0.2f, 0.9f, new[] { 1f }) });
+
+        // The second file cannot be moved while something holds it open.
+        using var hold = new FileStream(blocked, FileMode.Open, FileAccess.Read, FileShare.None);
+        if (!OperatingSystem.IsWindows()) return;
+
+        Assert.ThrowsAny<IOException>(() => world.Rename.Rename(source, "dst", merge: true));
+
+        var surviving = Path.Combine(dest, "a.jpg");
+        Assert.True(File.Exists(surviving));
+        Assert.Equal(new[] { "Анна" }, world.Tags.ReadTagsFile(dest).Files["a.jpg"].People);
+        Assert.Equal(new[] { "Олег" }, world.Tags.ReadTagsFile(source).Files["b.jpg"].People);
+        Assert.NotNull(world.Faces.TryGet(surviving, info.Length, info.LastWriteTimeUtc.Ticks));
+    }
+
     private sealed class RenameWorld : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "mt-rename-" + Guid.NewGuid().ToString("N"));
